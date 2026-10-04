@@ -105,6 +105,8 @@ local Config = {
         RAIL_RAY_DISTANCE = 14,
         RAIL_SIDE_DISTANCE = 8,
         WHEEL_RAIL_MAX_DISTANCE = 14,
+        RAIL_TOP_NORMAL_MIN = 0.55,
+        RAIL_SURFACE_MARGIN = 0.03,
         POSITION_RESPONSE = 60,
         ANCHOR_WHILE_SEATED = true,
         SCAN_INTERVAL = 0.25,
@@ -5597,31 +5599,67 @@ local function FindAntiRailNearPoint(
             cart
         )
 
-    local directions = {
+    local rayHeight =
+        Config.AntiDescarrilhador.RAIL_RAY_DISTANCE *
+        0.75
+
+    local rayLength =
+        Config.AntiDescarrilhador.RAIL_RAY_DISTANCE *
+        1.75
+
+    local offsets = {
         Vector3.new(
             0,
-            -1,
+            0,
             0
         ),
         Vector3.new(
-            1,
-            -0.25,
+            Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE,
+            0,
             0
         ),
         Vector3.new(
-            -1,
-            -0.25,
+            -Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE,
+            0,
             0
         ),
         Vector3.new(
             0,
-            -0.25,
-            1
+            0,
+            Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE
         ),
         Vector3.new(
             0,
-            -0.25,
-            -1
+            0,
+            -Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE
+        ),
+        Vector3.new(
+            Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
+            0.707,
+            0,
+            Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
+            0.707
+        ),
+        Vector3.new(
+            -Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
+            0.707,
+            0,
+            Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
+            0.707
+        ),
+        Vector3.new(
+            Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
+            0.707,
+            0,
+            -Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
+            0.707
+        ),
+        Vector3.new(
+            -Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
+            0.707,
+            0,
+            -Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
+            0.707
         )
     }
 
@@ -5629,17 +5667,26 @@ local function FindAntiRailNearPoint(
     local bestDistance =
         math.huge
 
-    for _, direction in ipairs(
-        directions
+    for _, offset in ipairs(
+        offsets
     ) do
         local result
 
         pcall(function()
             result =
                 Workspace:Raycast(
-                    origin,
-                    direction.Unit *
-                    Config.AntiDescarrilhador.RAIL_RAY_DISTANCE,
+                    origin +
+                    offset +
+                    Vector3.new(
+                        0,
+                        rayHeight,
+                        0
+                    ),
+                    Vector3.new(
+                        0,
+                        -rayLength,
+                        0
+                    ),
                     params
                 )
         end)
@@ -5648,7 +5695,11 @@ local function FindAntiRailNearPoint(
             and result.Instance
             and IsAntiTrackLikePart(
                 result.Instance
-            ) then
+            )
+            and result.Normal.Magnitude >
+            0.001
+            and result.Normal.Y >=
+            Config.AntiDescarrilhador.RAIL_TOP_NORMAL_MIN then
 
             local distance =
                 (
@@ -5669,7 +5720,6 @@ local function FindAntiRailNearPoint(
 
     return best
 end
-
 local function FindAntiRailNearWheel(
     wheel,
     cart
@@ -5679,104 +5729,16 @@ local function FindAntiRailNearWheel(
         return nil
     end
 
-    local hit =
+    return
         FindAntiRailNearPoint(
             wheel.Position,
             cart
         )
-
-    if hit then
-        return hit
-    end
-
-    local overlapParams =
-        OverlapParams.new()
-
-    overlapParams.FilterType =
-        Enum.RaycastFilterType.Exclude
-
-    overlapParams.FilterDescendantsInstances = {
-        cart
-    }
-
-    local nearby = {}
-
-    pcall(function()
-        nearby =
-            Workspace:GetPartBoundsInBox(
-                CFrame.new(
-                    wheel.Position
-                ),
-                Vector3.new(
-                    Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE,
-                    Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE,
-                    Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE
-                ),
-                overlapParams
-            )
-    end)
-
-    local nearest
-    local nearestDistance =
-        math.huge
-
-    for _, part in ipairs(
-        nearby
-    ) do
-        if IsAntiTrackLikePart(
-            part
-        ) then
-            local distance =
-                (
-                    part.Position -
-                    wheel.Position
-                ).Magnitude
-
-            if distance <
-                nearestDistance then
-                nearestDistance =
-                    distance
-
-                nearest =
-                    part
-            end
-        end
-    end
-
-    if nearest then
-        local direction =
-            nearest.Position -
-            wheel.Position
-
-        if direction.Magnitude >
-            0.001 then
-
-            local result
-
-            pcall(function()
-                result =
-                    Workspace:Raycast(
-                        wheel.Position,
-                        direction,
-                        params
-                    )
-            end)
-
-            if result
-                and result.Instance
-                and IsAntiTrackLikePart(
-                    result.Instance
-                ) then
-                return result
-            end
-        end
-    end
-
-    return nil
 end
-
 local function GetAntiWheelRadius(
-    wheel
+    wheel,
+    wheelFrame,
+    railNormal
 )
     local size =
         Vector3.one
@@ -5785,6 +5747,43 @@ local function GetAntiWheelRadius(
         size =
             wheel.Size
     end)
+
+    if wheelFrame
+        and railNormal
+        and railNormal.Magnitude >
+        0.001 then
+        local normal =
+            railNormal.Unit
+
+        local extent =
+            (
+                math.abs(
+                    wheelFrame.RightVector:Dot(
+                        normal
+                    )
+                ) *
+                size.X +
+                math.abs(
+                    wheelFrame.UpVector:Dot(
+                        normal
+                    )
+                ) *
+                size.Y +
+                math.abs(
+                    wheelFrame.LookVector:Dot(
+                        normal
+                    )
+                ) *
+                size.Z
+            ) *
+            0.5
+
+        return math.clamp(
+            extent,
+            0.05,
+            8
+        )
+    end
 
     local values = {
         size.X,
@@ -5804,6 +5803,50 @@ local function GetAntiWheelRadius(
     )
 end
 
+local function GetAntiBaseOffsetFromPivot(
+    part,
+    pivot,
+    targetYaw,
+    railNormal
+)
+    if not part
+        or not pivot
+        or not targetYaw
+        or not railNormal
+        or railNormal.Magnitude <=
+        0.001 then
+        return nil
+    end
+
+    local localPart
+
+    pcall(function()
+        localPart =
+            pivot:ToObjectSpace(
+                part.CFrame
+            )
+    end)
+
+    if not localPart then
+        return nil
+    end
+
+    local targetPartCFrame =
+        targetYaw *
+        localPart
+
+    local supportExtent =
+        GetAntiWheelRadius(
+            part,
+            targetPartCFrame,
+            railNormal
+        )
+
+    return
+        targetPartCFrame.Position -
+        railNormal.Unit *
+        supportExtent
+end
 local function GetAntiDescarrilhadorWheels(
     cart,
     referencePart
@@ -6511,12 +6554,9 @@ local function GetAntiTargetCFrame(
 
             if hit
                 and hit.Normal.Magnitude >
-                0.001 then
-
-                local radius =
-                    GetAntiWheelRadius(
-                        wheel
-                    )
+                0.001
+                and hit.Normal.Y >=
+                Config.AntiDescarrilhador.RAIL_TOP_NORMAL_MIN then
 
                 table.insert(
                     hits,
@@ -6524,11 +6564,7 @@ local function GetAntiTargetCFrame(
                         Wheel =
                             wheel,
                         Hit =
-                            hit,
-                        Position =
-                            hit.Position +
-                            hit.Normal.Unit *
-                            radius
+                            hit
                     }
                 )
             end
@@ -6545,7 +6581,9 @@ local function GetAntiTargetCFrame(
 
         if hit
             and hit.Normal.Magnitude >
-            0.001 then
+            0.001
+            and hit.Normal.Y >=
+            Config.AntiDescarrilhador.RAIL_TOP_NORMAL_MIN then
 
             table.insert(
                 hits,
@@ -6553,14 +6591,7 @@ local function GetAntiTargetCFrame(
                     Wheel =
                         nil,
                     Hit =
-                        hit,
-                    Position =
-                        hit.Position +
-                        hit.Normal.Unit *
-                        (
-                            referencePart.Size.Y *
-                            0.5
-                        )
+                        hit
                 }
             )
         end
@@ -6625,41 +6656,61 @@ local function GetAntiTargetCFrame(
     for _, data in ipairs(
         hits
     ) do
-        if data.Wheel then
-            local localWheel =
-                pivot:ToObjectSpace(
-                    data.Wheel.CFrame
-                )
+        local railNormal =
+            data.Hit.Normal
 
-            local rotated =
-                targetYaw:VectorToWorldSpace(
-                    localWheel.Position
-                )
+        if railNormal.Magnitude >
+            0.001 then
+            railNormal =
+                railNormal.Unit
 
-            targetPositionSum +=
-                data.Position -
-                rotated
+            local baseOffset
 
-            samples +=
-                1
+            if data.Wheel then
+                baseOffset =
+                    GetAntiBaseOffsetFromPivot(
+                        data.Wheel,
+                        pivot,
+                        targetYaw,
+                        railNormal
+                    )
+            else
+                baseOffset =
+                    GetAntiBaseOffsetFromPivot(
+                        referencePart,
+                        pivot,
+                        targetYaw,
+                        railNormal
+                    )
+            end
+
+            if baseOffset then
+                data.BaseOffset =
+                    baseOffset
+
+                data.Position =
+                    data.Hit.Position +
+                    railNormal *
+                    Config.AntiDescarrilhador.RAIL_SURFACE_MARGIN -
+                    baseOffset
+
+                targetPositionSum +=
+                    data.Position
+
+                samples +=
+                    1
+            end
         end
     end
 
-    local targetPosition
-
-    if samples >
+    if samples <=
         0 then
-        targetPosition =
-            targetPositionSum /
-            samples
-    else
-        targetPosition =
-            pivot.Position +
-            (
-                hits[1].Position -
-                referencePart.Position
-            )
+        return nil
     end
+
+    local targetPosition =
+        targetPositionSum /
+        samples
 
     local travelSpeed =
         State.AntiDescarrilhadorTravelSpeed
@@ -6723,7 +6774,6 @@ local function GetAntiTargetCFrame(
         railDirection,
         travelSpeed
 end
-
 local function ApplyAntiCFrame(
     cart,
     referencePart,
@@ -6751,44 +6801,14 @@ local function ApplyAntiCFrame(
         return false
     end
 
-    local current =
-        cart:GetPivot()
-
-    local corrected =
-        target
-
-    if State.AntiDescarrilhadorLastTargetCFrame then
-        corrected =
-            State.AntiDescarrilhadorLastTargetCFrame:Lerp(
-                target,
-                math.clamp(
-                    (dt or 0.016) *
-                    Config.AntiDescarrilhador.POSITION_RESPONSE,
-                    0.85,
-                    1
-                )
-            )
-    else
-        corrected =
-            current:Lerp(
-                target,
-                math.clamp(
-                    (dt or 0.016) *
-                    Config.AntiDescarrilhador.POSITION_RESPONSE,
-                    0.85,
-                    1
-                )
-            )
-    end
-
     pcall(function()
         cart:PivotTo(
-            corrected
+            target
         )
     end)
 
     State.AntiDescarrilhadorLastTargetCFrame =
-        corrected
+        target
 
     State.AntiDescarrilhadorTravelSpeed =
         travelSpeed
@@ -6804,7 +6824,6 @@ local function ApplyAntiCFrame(
 
     return true
 end
-
 local function UpdateAntiDescarrilhadorGui()
     local cart =
         State.AntiDescarrilhadorCurrentCart
@@ -7880,6 +7899,58 @@ local function SetupHeaderButtons()
     end
 end
 
+local function ApplyAlternativeGuiFont()
+    if not UI.ScreenGui then
+        return
+    end
+
+    local descendants =
+        {}
+
+    pcall(function()
+        descendants =
+            UI.ScreenGui:GetDescendants()
+    end)
+
+    for _, object in ipairs(
+        descendants
+    ) do
+        local isTextObject =
+            false
+
+        pcall(function()
+            isTextObject =
+                object:IsA("TextLabel")
+                or object:IsA("TextButton")
+                or object:IsA("TextBox")
+        end)
+
+        if isTextObject then
+            local font
+
+            pcall(function()
+                font =
+                    tostring(
+                        object.Font
+                    )
+            end)
+
+            if not font
+                or not string.find(
+                    font,
+                    "Gotham",
+                    1,
+                    true
+                ) then
+                pcall(function()
+                    object.Font =
+                        Enum.Font.GothamMedium
+                end)
+            end
+        end
+    end
+end
+
 local function InitializeGui()
     UI.ScreenGui =
         CreateScreenGui()
@@ -7908,6 +7979,7 @@ local function InitializeGui()
 
     CreatePages()
     CreateRestorePill()
+    ApplyAlternativeGuiFont()
     SetupNavigation()
     SetupToggles()
     SetupHeaderButtons()
