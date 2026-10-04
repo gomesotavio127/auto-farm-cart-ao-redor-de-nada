@@ -248,6 +248,7 @@ local State = {
     AntiDescarrilhadorLastLoggedSeated = nil,
     AntiDescarrilhadorLastLoggedCart = nil,
     AntiDescarrilhadorForcesActive = 0,
+    AntiDescarrilhadorCurrentForce = 0,
     AntiDescarrilhadorSpeedApplied = nil,
     AntiDescarrilhadorSpeedControllers = {},
     AntiDescarrilhadorOriginalSpeedValues = {},
@@ -295,6 +296,7 @@ local UI = {
     AntiStatusCart = nil,
     AntiStatusWheels = nil,
     AntiStatusSpeed = nil,
+    AntiStatusForce = nil,
     AntiStatusMode = nil,
     AntiStatusState = nil,
 
@@ -4578,7 +4580,7 @@ local function CreatePages()
                 1,
                 0,
                 0,
-                214
+                240
             ),
             UDim2.new(
                 0,
@@ -4700,11 +4702,11 @@ local function CreatePages()
             Enum.Font.GothamMedium
         )
 
-    UI.AntiStatusMode =
+    UI.AntiStatusForce =
         CreateLabel(
             antiStatusPanel,
-            "Mode",
-            "Constraints ativas: 0",
+            "Force",
+            "Força atual: 0",
             UDim2.new(
                 1,
                 -32,
@@ -4716,6 +4718,28 @@ local function CreatePages()
                 16,
                 0,
                 160
+            ),
+            9,
+            COR_TEXTO_SECUNDARIO,
+            Enum.Font.GothamMedium
+        )
+
+    UI.AntiStatusMode =
+        CreateLabel(
+            antiStatusPanel,
+            "Mode",
+            "Forças ativas: 0",
+            UDim2.new(
+                1,
+                -32,
+                0,
+                24
+            ),
+            UDim2.new(
+                0,
+                16,
+                0,
+                186
             ),
             9,
             COR_TEXTO_SECUNDARIO,
@@ -4737,7 +4761,7 @@ local function CreatePages()
                 0,
                 16,
                 0,
-                186
+                212
             ),
             9,
             COR_TEXTO_TERCEARIO,
@@ -5408,6 +5432,9 @@ local function RestoreAntiCartPhysics()
 
     State.AntiDescarrilhadorSpeedApplied =
         nil
+
+    State.AntiDescarrilhadorCurrentForce =
+        0
 end
 
 local function CleanupAntiCurrentCart()
@@ -5421,6 +5448,9 @@ local function CleanupAntiCurrentCart()
         nil
 
     State.AntiDescarrilhadorForcesActive =
+        0
+
+    State.AntiDescarrilhadorCurrentForce =
         0
 
     State.AntiDescarrilhadorLastScan =
@@ -6088,10 +6118,13 @@ local function CreateAntiWheelForce(
 end
 
 local function UpdateAntiWheelForce(
-    wheel
+    wheel,
+    chassis
 )
     if not wheel
-        or not wheel.Parent then
+        or not wheel.Parent
+        or not chassis
+        or not chassis.Parent then
         return false
     end
 
@@ -6105,31 +6138,48 @@ local function UpdateAntiWheelForce(
         return false
     end
 
-    local multiplier =
-        Config.AntiDescarrilhador.DOWNFORCE_MULTIPLIER
+    local gravityExtra =
+        200
 
-    local assemblyMass =
+    local k =
+        5
+
+    local wheelMass =
+        0
+
+    local speed =
         0
 
     pcall(function()
-        assemblyMass =
+        wheelMass =
             wheel.AssemblyMass
     end)
 
-    if assemblyMass <=
+    pcall(function()
+        speed =
+            chassis.AssemblyLinearVelocity.Magnitude
+    end)
+
+    if wheelMass <=
         0 then
         return false
     end
 
-    local force =
-        assemblyMass *
-        multiplier
+    local forceY =
+        wheelMass *
+        (
+            gravityExtra +
+            k *
+            speed *
+            speed /
+            100
+        )
 
     pcall(function()
         data.VectorForce.Force =
             Vector3.new(
                 0,
-                -force,
+                -forceY,
                 0
             )
 
@@ -6143,14 +6193,21 @@ local function UpdateAntiWheelForce(
             true
     end)
 
-    return true
+    return
+        true,
+        forceY
 end
 
-local function ApplyAntiWheelForces()
+local function ApplyAntiWheelForces(
+    chassis
+)
     local active =
         {}
 
     local count =
+        0
+
+    local currentForce =
         0
 
     for _, wheel in ipairs(
@@ -6158,18 +6215,32 @@ local function ApplyAntiWheelForces()
     ) do
 
         if wheel
-            and wheel.Parent
-            and UpdateAntiWheelForce(
-                wheel
-            ) then
+            and wheel.Parent then
 
-            active[
-                wheel
-            ] =
-                true
+            local updated,
+                forceY =
+                UpdateAntiWheelForce(
+                    wheel,
+                    chassis
+                )
 
-            count +=
-                1
+            if updated then
+                active[
+                    wheel
+                ] =
+                    true
+
+                count +=
+                    1
+
+                if forceY
+                    and forceY >
+                    currentForce then
+
+                    currentForce =
+                        forceY
+                end
+            end
         end
     end
 
@@ -6180,6 +6251,7 @@ local function ApplyAntiWheelForces()
         if not active[
             wheel
         ] then
+
             DestroyAntiWheelForce(
                 wheel
             )
@@ -6189,7 +6261,11 @@ local function ApplyAntiWheelForces()
     State.AntiDescarrilhadorForcesActive =
         count
 
-    return count
+    State.AntiDescarrilhadorCurrentForce =
+        currentForce
+
+    return
+        count
 end
 
 local function UpdateAntiDescarrilhadorGui()
@@ -6242,6 +6318,16 @@ local function UpdateAntiDescarrilhadorGui()
         UI.AntiStatusSpeed.Text =
             "Velocidade máxima aplicada: " ..
             speedText
+    end
+
+    if UI.AntiStatusForce then
+        UI.AntiStatusForce.Text =
+            "Força atual: " ..
+            string.format(
+                "%.0f",
+                State.AntiDescarrilhadorCurrentForce
+                    or 0
+            )
     end
 
     if UI.AntiStatusMode then
@@ -6443,7 +6529,9 @@ function(
             cart
         )
 
-        ApplyAntiWheelForces()
+        ApplyAntiWheelForces(
+            referencePart
+        )
     end
 
     return true
