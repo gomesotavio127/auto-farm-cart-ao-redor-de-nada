@@ -279,6 +279,7 @@ local State = {
     AntiDescarrilhadorHeartbeat = nil,
     AntiDescarrilhadorCharacterConnection = nil,
     AntiDescarrilhadorSeatedConnection = nil,
+    AntiDescarrilhadorSeatPropertyConnection = nil,
     AntiDescarrilhadorHumanoid = nil,
     AntiDescarrilhadorLastVelocity = Vector3.zero,
     AntiDescarrilhadorLastPosition = nil,
@@ -6220,6 +6221,7 @@ local function ApplyAntiForces(
     end
 
     local seatPart
+    local seatedCart
 
     pcall(function()
         seatPart =
@@ -6231,15 +6233,11 @@ local function ApplyAntiForces(
         return
     end
 
-    local seatedCart
-
-    pcall(function()
-        seatedCart =
-            seatPart:
-            FindFirstAncestorOfClass(
-                "Model"
-            )
-    end)
+    seatedCart =
+        GetSeatedCartFromHumanoid(
+            humanoid,
+            seatPart
+        )
 
     if not seatedCart
         or not seatedCart.Parent then
@@ -6792,6 +6790,141 @@ local function ApplyAntiForces(
         position
 end
 
+local function GetSeatedCartFromHumanoid(
+    humanoid,
+    seatPart
+)
+    if not humanoid then
+        return nil
+    end
+
+    local resolvedSeat =
+        seatPart
+
+    if not resolvedSeat then
+        pcall(function()
+            resolvedSeat =
+                humanoid.SeatPart
+        end)
+    end
+
+    if not resolvedSeat then
+        return nil
+    end
+
+    local isSeat = false
+
+    pcall(function()
+        isSeat =
+            resolvedSeat:IsA("Seat")
+            or resolvedSeat:IsA("VehicleSeat")
+    end)
+
+    if not isSeat then
+        return nil
+    end
+
+    local occupant
+
+    pcall(function()
+        occupant =
+            resolvedSeat.Occupant
+    end)
+
+    if occupant
+        and occupant ~= humanoid then
+        return nil
+    end
+
+    local cart
+
+    pcall(function()
+        cart =
+            resolvedSeat:
+            FindFirstAncestorOfClass(
+                "Model"
+            )
+    end)
+
+    if cart
+        and cart.Parent then
+        return cart
+    end
+
+    local ancestor =
+        resolvedSeat.Parent
+
+    while ancestor do
+        local isModel = false
+
+        pcall(function()
+            isModel =
+                ancestor:IsA("Model")
+        end)
+
+        if isModel
+            and ancestor.Parent then
+            cart =
+                ancestor
+
+            break
+        end
+
+        ancestor =
+            ancestor.Parent
+
+        if ancestor == Workspace then
+            break
+        end
+    end
+
+    if cart
+        and cart.Parent then
+        return cart
+    end
+
+    return nil
+end
+
+local function SyncAntiSeatedCart(
+    humanoid,
+    seatPart
+)
+    if not State.AntiDescarrilhadorEnabled then
+        return false
+    end
+
+    if not humanoid then
+        CleanupAntiCurrentCart()
+        return false
+    end
+
+    local cart =
+        GetSeatedCartFromHumanoid(
+            humanoid,
+            seatPart
+        )
+
+    if not cart
+        or not cart.Parent then
+        CleanupAntiCurrentCart()
+        return false
+    end
+
+    if State.AntiDescarrilhadorCurrentCart ~=
+        cart then
+        CleanupAntiCurrentCart()
+
+        State.AntiDescarrilhadorCurrentCart =
+            cart
+    end
+
+    return
+        ApplyAntiDescarrilhador(
+            cart
+        )
+end
+
 local function BindAntiHumanoid(
     humanoid
 )
@@ -6801,6 +6934,15 @@ local function BindAntiHumanoid(
         )
 
         State.AntiDescarrilhadorSeatedConnection =
+            nil
+    end
+
+    if State.AntiDescarrilhadorSeatPropertyConnection then
+        DisconnectConnection(
+            State.AntiDescarrilhadorSeatPropertyConnection
+        )
+
+        State.AntiDescarrilhadorSeatPropertyConnection =
             nil
     end
 
@@ -6819,41 +6961,41 @@ local function BindAntiHumanoid(
                     return
                 end
 
-                if not active
-                    or not seatPart then
+                if not active then
                     CleanupAntiCurrentCart()
                     return
                 end
 
-                local cart
-
-                pcall(function()
-                    cart =
-                        seatPart:
-                        FindFirstAncestorOfClass(
-                            "Model"
-                        )
-                end)
-
-                if cart
-                    and cart.Parent then
-
-                    if State.AntiDescarrilhadorCurrentCart ~=
-                        cart then
-                        CleanupAntiCurrentCart()
-
-                        State.AntiDescarrilhadorCurrentCart =
-                            cart
-                    end
-
-                    ApplyAntiDescarrilhador(
-                        cart
-                    )
-                else
-                    CleanupAntiCurrentCart()
-                end
+                SyncAntiSeatedCart(
+                    humanoid,
+                    seatPart
+                )
             end
         )
+
+    State.AntiDescarrilhadorSeatPropertyConnection =
+        Connect(
+            humanoid:GetPropertyChangedSignal(
+                "SeatPart"
+            ),
+            function()
+                if not State.AntiDescarrilhadorEnabled then
+                    return
+                end
+
+                SyncAntiSeatedCart(
+                    humanoid,
+                    nil
+                )
+            end
+        )
+
+    -- CORREÇÃO: sincroniza imediatamente caso o jogador
+    -- já esteja sentado quando o anti-descarrilhador for ligado.
+    SyncAntiSeatedCart(
+        humanoid,
+        humanoid.SeatPart
+    )
 end
 
 local function SetupAntiCharacterWatcher()
@@ -6945,34 +7087,12 @@ local function EnableAntiDescarrilhador()
             humanoid
         )
 
-        local seatPart
-
-        pcall(function()
-            seatPart =
-                humanoid.SeatPart
-        end)
-
-        if seatPart then
-            local cart
-
-            pcall(function()
-                cart =
-                    seatPart:
-                    FindFirstAncestorOfClass(
-                        "Model"
-                    )
-            end)
-
-            if cart
-                and cart.Parent then
-                State.AntiDescarrilhadorCurrentCart =
-                    cart
-
-                ApplyAntiDescarrilhador(
-                    cart
-                )
-            end
-        end
+        -- CORREÇÃO: a função BindAntiHumanoid já resolve
+        -- o SeatPart atual e encontra o Model correto.
+        SyncAntiSeatedCart(
+            humanoid,
+            humanoid.SeatPart
+        )
     end
 
     SetAntiToggleVisual(
@@ -7021,6 +7141,15 @@ local function CleanupAntiDescarrilhador()
         )
 
         State.AntiDescarrilhadorSeatedConnection =
+            nil
+    end
+
+    if State.AntiDescarrilhadorSeatPropertyConnection then
+        DisconnectConnection(
+            State.AntiDescarrilhadorSeatPropertyConnection
+        )
+
+        State.AntiDescarrilhadorSeatPropertyConnection =
             nil
     end
 
