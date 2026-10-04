@@ -253,6 +253,7 @@ local State = {
     AntiDescarrilhadorLastLoggedCart = nil,
     AntiDescarrilhadorWheelsOnTrack = 0,
     AntiDescarrilhadorSpeedApplied = nil,
+    AntiDescarrilhadorTravelSpeed = 0,
     AntiDescarrilhadorSpeedControllers = {},
     AntiDescarrilhadorOriginalSpeedValues = {},
     AntiDescarrilhadorOriginalAnchored = {},
@@ -5345,6 +5346,9 @@ local function RestoreAntiCartPhysics()
 
     State.AntiDescarrilhadorSpeedApplied =
         nil
+
+    State.AntiDescarrilhadorTravelSpeed =
+        0
 end
 
 local function CleanupAntiCurrentCart()
@@ -6405,6 +6409,11 @@ local function ApplyAntiSpeedControllers(
         end
     end
 
+    if not State.AntiDescarrilhadorSpeedApplied then
+        State.AntiDescarrilhadorSpeedApplied =
+            targetSpeed
+    end
+
     return
         State.AntiDescarrilhadorSpeedApplied
 end
@@ -6453,7 +6462,8 @@ end
 
 local function GetAntiTargetCFrame(
     cart,
-    referencePart
+    referencePart,
+    dt
 )
     if not cart
         or not cart.Parent
@@ -6588,6 +6598,13 @@ local function GetAntiTargetCFrame(
     local railDirection =
         directionSum.Unit
 
+    if railDirection:Dot(
+        forward
+    ) < 0 then
+        railDirection =
+            -railDirection
+    end
+
     local targetYaw =
         CFrame.lookAt(
             Vector3.zero,
@@ -6644,11 +6661,67 @@ local function GetAntiTargetCFrame(
             )
     end
 
+    local travelSpeed =
+        State.AntiDescarrilhadorTravelSpeed
+
+    if State.AntiDescarrilhadorSpeedApplied
+        and State.AntiDescarrilhadorSpeedApplied > 0 then
+        travelSpeed =
+            State.AntiDescarrilhadorSpeedApplied
+    end
+
+    if travelSpeed <=
+        0 then
+        local currentVelocity =
+            Vector3.zero
+
+        pcall(function()
+            currentVelocity =
+                referencePart.AssemblyLinearVelocity
+        end)
+
+        local currentHorizontal =
+            Vector3.new(
+                currentVelocity.X,
+                0,
+                currentVelocity.Z
+            )
+
+        if currentHorizontal.Magnitude >
+            0.5 then
+            travelSpeed =
+                currentHorizontal.Magnitude
+        end
+    end
+
+    if travelSpeed <=
+        0 then
+        travelSpeed =
+            Config.AntiDescarrilhador.TARGET_SPEED
+    end
+
+    State.AntiDescarrilhadorTravelSpeed =
+        travelSpeed
+
+    local movement =
+        railDirection *
+        travelSpeed *
+        math.clamp(
+            dt or 0.016,
+            0,
+            0.1
+        )
+
+    targetPosition +=
+        movement
+
     return
         CFrame.new(
             targetPosition
         ) *
-        targetYaw
+        targetYaw,
+        railDirection,
+        travelSpeed
 end
 
 local function ApplyAntiCFrame(
@@ -6665,10 +6738,13 @@ local function ApplyAntiCFrame(
         cart
     )
 
-    local target =
+    local target,
+        railDirection,
+        travelSpeed =
         GetAntiTargetCFrame(
             cart,
-            referencePart
+            referencePart,
+            dt
         )
 
     if not target then
@@ -6678,19 +6754,32 @@ local function ApplyAntiCFrame(
     local current =
         cart:GetPivot()
 
-    local alpha =
-        math.clamp(
-            (dt or 0.016) *
-            Config.AntiDescarrilhador.POSITION_RESPONSE,
-            0.9,
-            1
-        )
-
     local corrected =
-        current:Lerp(
-            target,
-            alpha
-        )
+        target
+
+    if State.AntiDescarrilhadorLastTargetCFrame then
+        corrected =
+            State.AntiDescarrilhadorLastTargetCFrame:Lerp(
+                target,
+                math.clamp(
+                    (dt or 0.016) *
+                    Config.AntiDescarrilhador.POSITION_RESPONSE,
+                    0.85,
+                    1
+                )
+            )
+    else
+        corrected =
+            current:Lerp(
+                target,
+                math.clamp(
+                    (dt or 0.016) *
+                    Config.AntiDescarrilhador.POSITION_RESPONSE,
+                    0.85,
+                    1
+                )
+            )
+    end
 
     pcall(function()
         cart:PivotTo(
@@ -6701,9 +6790,13 @@ local function ApplyAntiCFrame(
     State.AntiDescarrilhadorLastTargetCFrame =
         corrected
 
+    State.AntiDescarrilhadorTravelSpeed =
+        travelSpeed
+
     pcall(function()
         referencePart.AssemblyLinearVelocity =
-            Vector3.zero
+            railDirection *
+            travelSpeed
 
         referencePart.AssemblyAngularVelocity =
             Vector3.zero
@@ -6752,18 +6845,11 @@ local function UpdateAntiDescarrilhadorGui()
 
     if UI.AntiStatusSpeed then
         local speedText =
-            "—"
-
-        if State.AntiDescarrilhadorSpeedApplied then
-            speedText =
-                string.format(
-                    "%.0f",
-                    State.AntiDescarrilhadorSpeedApplied
-                )
-        else
-            speedText =
-                "nenhum controlador"
-        end
+            string.format(
+                "%.0f",
+                State.AntiDescarrilhadorSpeedApplied
+                or Config.AntiDescarrilhador.TARGET_SPEED
+            )
 
         UI.AntiStatusSpeed.Text =
             "Velocidade máxima aplicada: " ..
