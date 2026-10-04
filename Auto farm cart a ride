@@ -262,6 +262,8 @@ local State = {
     AntiDescarrilhadorSpeedControllers = {},
     AntiDescarrilhadorOriginalSpeedValues = {},
     AntiDescarrilhadorConstraints = {},
+    AntiDescarrilhadorRailCandidates = {},
+    AntiDescarrilhadorLastRailRefresh = 0,
     AntiDescarrilhadorLastScan = 0,
     AntiDescarrilhadorLastGuiUpdate = 0
 }
@@ -5448,6 +5450,13 @@ local function CleanupAntiCurrentCart()
 
     State.AntiDescarrilhadorLastScan =
         0
+
+    table.clear(
+        State.AntiDescarrilhadorRailCandidates
+    )
+
+    State.AntiDescarrilhadorLastRailRefresh =
+        0
 end
 local function IsAntiBasePart(
     object
@@ -5563,37 +5572,70 @@ local function IsAntiTrackLikePart(
     return false
 end
 
+local function RefreshAntiRailCandidates()
+    local now =
+        os.clock()
+
+    if now -
+        State.AntiDescarrilhadorLastRailRefresh <
+        1
+        and #State.AntiDescarrilhadorRailCandidates >
+        0 then
+        return
+    end
+
+    local candidates =
+        {}
+
+    local descendants
+
+    pcall(function()
+        descendants =
+            Workspace:GetDescendants()
+    end)
+
+    if descendants then
+        for _, object in ipairs(
+            descendants
+        ) do
+            if IsAntiBasePart(
+                object
+            )
+                and IsAntiTrackLikePart(
+                    object
+                ) then
+
+                table.insert(
+                    candidates,
+                    object
+                )
+            end
+        end
+    end
+
+    State.AntiDescarrilhadorRailCandidates =
+        candidates
+
+    State.AntiDescarrilhadorLastRailRefresh =
+        now
+end
+
 local function GetAntiRaycastParams(
     cart
 )
+    RefreshAntiRailCandidates()
+
     local params =
         RaycastParams.new()
 
     params.FilterType =
-        Enum.RaycastFilterType.Exclude
-
-    local exclude =
-        {}
-
-    if cart then
-        table.insert(
-            exclude,
-            cart
-        )
-    end
-
-    local character =
-        SafeGetCharacter()
-
-    if character then
-        table.insert(
-            exclude,
-            character
-        )
-    end
+        Enum.RaycastFilterType.Include
 
     params.FilterDescendantsInstances =
-        exclude
+        State.AntiDescarrilhadorRailCandidates
+
+    params.IgnoreWater =
+        true
 
     return params
 end
@@ -6636,10 +6678,23 @@ local function CreateAntiWheelConstraint(
             railNormal
         )
 
-    local targetWheelCenter =
-        hit.Position +
-        railNormal *
+    local wheelContactOffsetWorld =
+        -railNormal *
         radius
+
+    local wheelContactOffsetLocal =
+        wheel.CFrame:
+        VectorToObjectSpace(
+            wheelContactOffsetWorld
+        )
+
+    local railTargetCFrame =
+        CFrame.lookAt(
+            hit.Position,
+            hit.Position +
+            railDirection,
+            railNormal
+        )
 
     local wheelAttachment =
         Instance.new(
@@ -6650,7 +6705,7 @@ local function CreateAntiWheelConstraint(
         "CarRideAntiRailWheel"
 
     wheelAttachment.Position =
-        Vector3.zero
+        wheelContactOffsetLocal
 
     wheelAttachment.Parent =
         wheel
@@ -6663,10 +6718,10 @@ local function CreateAntiWheelConstraint(
     railPositionAttachment.Name =
         "CarRideAntiRailPosition"
 
-    railPositionAttachment.Position =
+    railPositionAttachment.CFrame =
         railPart.CFrame:
-        PointToObjectSpace(
-            targetWheelCenter
+        ToObjectSpace(
+            railTargetCFrame
         )
 
     railPositionAttachment.Parent =
@@ -6680,8 +6735,8 @@ local function CreateAntiWheelConstraint(
     railOrientationAttachment.Name =
         "CarRideAntiRailOrientation"
 
-    railOrientationAttachment.Position =
-        railPositionAttachment.Position
+    railOrientationAttachment.CFrame =
+        railPositionAttachment.CFrame
 
     railOrientationAttachment.Parent =
         railPart
@@ -6963,10 +7018,23 @@ local function UpdateAntiWheelConstraint(
             railNormal
         )
 
-    local targetWheelCenter =
-        hit.Position +
-        railNormal *
+    local wheelContactOffsetWorld =
+        -railNormal *
         radius
+
+    local wheelContactOffsetLocal =
+        wheel.CFrame:
+        VectorToObjectSpace(
+            wheelContactOffsetWorld
+        )
+
+    local railTargetCFrame =
+        CFrame.lookAt(
+            hit.Position,
+            hit.Position +
+            railDirection,
+            railNormal
+        )
 
     local assemblyMass =
         referencePart.AssemblyMass
@@ -6980,14 +7048,17 @@ local function UpdateAntiWheelConstraint(
         )
 
     pcall(function()
-        data.RailPositionAttachment.Position =
+        data.WheelAttachment.Position =
+            wheelContactOffsetLocal
+
+        data.RailPositionAttachment.CFrame =
             railPart.CFrame:
-            PointToObjectSpace(
-                targetWheelCenter
+            ToObjectSpace(
+                railTargetCFrame
             )
 
-        data.RailOrientationAttachment.Position =
-            data.RailPositionAttachment.Position
+        data.RailOrientationAttachment.CFrame =
+            data.RailPositionAttachment.CFrame
 
         SetAntiAttachmentAxes(
             data.RailPositionAttachment,
@@ -7368,6 +7439,9 @@ function(
 
         State.AntiDescarrilhadorCurrentCart =
             cart
+
+        State.AntiDescarrilhadorLastRailRefresh =
+            0
     end
 
     local referencePart =
