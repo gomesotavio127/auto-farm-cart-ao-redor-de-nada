@@ -7412,16 +7412,6 @@ local function BindAntiHumanoid(
                     humanoid,
                     seatPart
                 )
-
-                task.defer(function()
-                    if State.AntiDescarrilhadorEnabled then
-                        pcall(function()
-                            UpdateAntiMonitor(
-                                0
-                            )
-                        end)
-                    end
-                end)
             end
         )
 
