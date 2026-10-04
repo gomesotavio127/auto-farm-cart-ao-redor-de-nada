@@ -6161,45 +6161,80 @@ local function GetAntiCurveData(
         0
 
     if #samples >= 2 then
+        local previousDirection
+
         for index = 2, #samples do
-            local previous =
+            local localDirection =
+                nil
+
+            local previousPosition =
                 samples[
                     index - 1
-                ].Direction
+                ].Position
 
-            local current =
+            local currentPosition =
                 samples[
                     index
-                ].Direction
+                ].Position
 
-            if previous:Dot(
-                current
-            ) < 0 then
-                current =
-                    -current
-            end
-
-            local dot =
-                math.clamp(
-                    previous:Dot(
-                        current
-                    ),
-                    -1,
-                    1
-                )
-
-            local angle =
-                math.deg(
-                    math.acos(
-                        dot
+            if previousPosition
+                and currentPosition then
+                local chord =
+                    Vector3.new(
+                        currentPosition.X -
+                        previousPosition.X,
+                        0,
+                        currentPosition.Z -
+                        previousPosition.Z
                     )
-                )
 
-            if angle >
-                curveAngle then
-                curveAngle =
-                    angle
+                if chord.Magnitude >
+                    0.05 then
+                    localDirection =
+                        chord.Unit
+                end
             end
+
+            if not localDirection then
+                localDirection =
+                    samples[
+                        index
+                    ].Direction
+            end
+
+            if previousDirection then
+                if previousDirection:Dot(
+                    localDirection
+                ) < 0 then
+                    localDirection =
+                        -localDirection
+                end
+
+                local dot =
+                    math.clamp(
+                        previousDirection:Dot(
+                            localDirection
+                        ),
+                        -1,
+                        1
+                    )
+
+                local angle =
+                    math.deg(
+                        math.acos(
+                            dot
+                        )
+                    )
+
+                if angle >
+                    curveAngle then
+                    curveAngle =
+                        angle
+                end
+            end
+
+            previousDirection =
+                localDirection
         end
     else
         local horizontal =
@@ -6945,8 +6980,7 @@ local function UpdateAntiMonitor(
             now
     end
 
-    if State.AntiDescarrilhadorEnabled
-        and State.AntiDescarrilhadorLastGuiUpdate <=
+    if State.AntiDescarrilhadorLastGuiUpdate <=
         now -
         Config.AntiDescarrilhador.GUI_UPDATE_INTERVAL then
         State.AntiDescarrilhadorLastGuiUpdate =
