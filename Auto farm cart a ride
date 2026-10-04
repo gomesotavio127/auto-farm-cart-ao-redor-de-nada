@@ -103,8 +103,8 @@ local Config = {
         MAX_WHEELS = 8,
         WHEEL_FALLBACK_COUNT = 4,
         DOWNFORCE_MULTIPLIER = 200,
-        SPEED_FORCE_K = 1,
-        UPRIGHT_TORQUE = 5000000,
+        SPEED_FORCE_K = 0.2,
+        UPRIGHT_TORQUE = 500000,
         SCAN_INTERVAL = 0.10,
         GUI_UPDATE_INTERVAL = 0.1
     }
@@ -6149,35 +6149,6 @@ local function FindRailDirection(primary)
     return nil
 end
 
-local function ProjectVelocityToRail(primary, railDir)
-    if not primary or not primary.Parent or not railDir then
-        return
-    end
-
-    local velocity
-    pcall(function()
-        velocity = primary.AssemblyLinearVelocity
-    end)
-
-    if not velocity then
-        return
-    end
-
-    local flatVel = Vector3.new(velocity.X, 0, velocity.Z)
-    local speed = flatVel.Magnitude
-
-    if speed < 1 then
-        return
-    end
-
-    local sign = flatVel:Dot(railDir) >= 0 and 1 or -1
-
-    pcall(function()
-        primary.AssemblyLinearVelocity =
-            railDir * speed * sign +
-            Vector3.new(0, velocity.Y, 0)
-    end)
-end
 
 
 local function UpdateAntiUpright()
@@ -6192,10 +6163,6 @@ local function UpdateAntiUpright()
     local primary = data.Primary
 
     local railDir = FindRailDirection(primary)
-
-    if railDir then
-        ProjectVelocityToRail(primary, railDir)
-    end
 
     local position
 
@@ -6244,7 +6211,6 @@ local function UpdateAntiUpright()
             )
     end)
 end
-
 local function UpdateAntiWheelForce(
     wheel
 )
