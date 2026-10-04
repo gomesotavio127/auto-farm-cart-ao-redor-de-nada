@@ -6205,6 +6205,9 @@ local function UpdateAntiOrientation(
     end
 end
 
+local GetSeatedCartFromHumanoid
+local SyncAntiSeatedCart
+
 local function ApplyAntiForces(
     dt
 )
@@ -6790,7 +6793,8 @@ local function ApplyAntiForces(
         position
 end
 
-local function GetSeatedCartFromHumanoid(
+GetSeatedCartFromHumanoid =
+function(
     humanoid,
     seatPart
 )
@@ -6886,7 +6890,8 @@ local function GetSeatedCartFromHumanoid(
     return nil
 end
 
-local function SyncAntiSeatedCart(
+SyncAntiSeatedCart =
+function(
     humanoid,
     seatPart
 )
