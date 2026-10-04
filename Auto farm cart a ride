@@ -103,6 +103,7 @@ local Config = {
         MAX_WHEELS = 8,
         WHEEL_FALLBACK_COUNT = 4,
         DOWNFORCE_MULTIPLIER = 200,
+        CENTRIPETAL_FORCE_MULTIPLIER = 1.5,
         SCAN_INTERVAL = 0.10,
         GUI_UPDATE_INTERVAL = 0.1
     }
@@ -249,6 +250,9 @@ local State = {
     AntiDescarrilhadorLastLoggedCart = nil,
     AntiDescarrilhadorForcesActive = 0,
     AntiDescarrilhadorCurrentForce = 0,
+    AntiDescarrilhadorCurrentLateralForce = 0,
+    AntiDescarrilhadorLastDirection = nil,
+    AntiDescarrilhadorLateralForce = nil,
     AntiDescarrilhadorSpeedApplied = nil,
     AntiDescarrilhadorSpeedControllers = {},
     AntiDescarrilhadorOriginalSpeedValues = {},
@@ -297,6 +301,7 @@ local UI = {
     AntiStatusWheels = nil,
     AntiStatusSpeed = nil,
     AntiStatusForce = nil,
+    AntiStatusLateralForce = nil,
     AntiStatusMode = nil,
     AntiStatusState = nil,
 
@@ -4580,7 +4585,7 @@ local function CreatePages()
                 1,
                 0,
                 0,
-                240
+                266
             ),
             UDim2.new(
                 0,
@@ -4706,7 +4711,7 @@ local function CreatePages()
         CreateLabel(
             antiStatusPanel,
             "Force",
-            "Força atual: 0",
+            "Força vertical: 0",
             UDim2.new(
                 1,
                 -32,
@@ -4718,6 +4723,28 @@ local function CreatePages()
                 16,
                 0,
                 160
+            ),
+            9,
+            COR_TEXTO_SECUNDARIO,
+            Enum.Font.GothamMedium
+        )
+
+    UI.AntiStatusLateralForce =
+        CreateLabel(
+            antiStatusPanel,
+            "LateralForce",
+            "Força lateral: 0",
+            UDim2.new(
+                1,
+                -32,
+                0,
+                24
+            ),
+            UDim2.new(
+                0,
+                16,
+                0,
+                186
             ),
             9,
             COR_TEXTO_SECUNDARIO,
@@ -4739,7 +4766,7 @@ local function CreatePages()
                 0,
                 16,
                 0,
-                186
+                212
             ),
             9,
             COR_TEXTO_SECUNDARIO,
@@ -4761,7 +4788,7 @@ local function CreatePages()
                 0,
                 16,
                 0,
-                212
+                238
             ),
             9,
             COR_TEXTO_TERCEARIO,
@@ -5435,9 +5462,20 @@ local function RestoreAntiCartPhysics()
 
     State.AntiDescarrilhadorCurrentForce =
         0
+
+    State.AntiDescarrilhadorCurrentLateralForce =
+        0
+
+    State.AntiDescarrilhadorLastDirection =
+        nil
+
+    State.AntiDescarrilhadorLateralForce =
+        nil
 end
 
 local function CleanupAntiCurrentCart()
+    DestroyAntiLateralForce()
+
     RestoreAntiCartPhysics()
 
     table.clear(
@@ -5452,6 +5490,15 @@ local function CleanupAntiCurrentCart()
 
     State.AntiDescarrilhadorCurrentForce =
         0
+
+    State.AntiDescarrilhadorCurrentLateralForce =
+        0
+
+    State.AntiDescarrilhadorLastDirection =
+        nil
+
+    State.AntiDescarrilhadorLateralForce =
+        nil
 
     State.AntiDescarrilhadorLastScan =
         0
@@ -6118,13 +6165,10 @@ local function CreateAntiWheelForce(
 end
 
 local function UpdateAntiWheelForce(
-    wheel,
-    chassis
+    wheel
 )
     if not wheel
-        or not wheel.Parent
-        or not chassis
-        or not chassis.Parent then
+        or not wheel.Parent then
         return false
     end
 
@@ -6138,26 +6182,15 @@ local function UpdateAntiWheelForce(
         return false
     end
 
-    local gravityExtra =
-        200
-
-    local k =
-        5
+    local forceMultiplier =
+        Config.AntiDescarrilhador.DOWNFORCE_MULTIPLIER
 
     local wheelMass =
-        0
-
-    local speed =
         0
 
     pcall(function()
         wheelMass =
             wheel.AssemblyMass
-    end)
-
-    pcall(function()
-        speed =
-            chassis.AssemblyLinearVelocity.Magnitude
     end)
 
     if wheelMass <=
@@ -6167,13 +6200,7 @@ local function UpdateAntiWheelForce(
 
     local forceY =
         wheelMass *
-        (
-            gravityExtra +
-            k *
-            speed *
-            speed /
-            100
-        )
+        forceMultiplier
 
     pcall(function()
         data.VectorForce.Force =
@@ -6198,9 +6225,7 @@ local function UpdateAntiWheelForce(
         forceY
 end
 
-local function ApplyAntiWheelForces(
-    chassis
-)
+local function ApplyAntiWheelForces()
     local active =
         {}
 
@@ -6220,8 +6245,7 @@ local function ApplyAntiWheelForces(
             local updated,
                 forceY =
                 UpdateAntiWheelForce(
-                    wheel,
-                    chassis
+                    wheel
                 )
 
             if updated then
@@ -6266,6 +6290,259 @@ local function ApplyAntiWheelForces(
 
     return
         count
+end
+
+local function CreateAntiLateralForce(
+    chassis
+)
+    if not chassis
+        or not chassis.Parent then
+        return nil
+    end
+
+    local existing =
+        State.AntiDescarrilhadorLateralForce
+
+    if existing
+        and existing.VectorForce
+        and existing.VectorForce.Parent ==
+        chassis then
+
+        return existing
+    end
+
+    if existing then
+        pcall(function()
+            if existing.VectorForce then
+                existing.VectorForce.Enabled =
+                    false
+
+                existing.VectorForce:Destroy()
+            end
+
+            if existing.Attachment then
+                existing.Attachment:Destroy()
+            end
+        end)
+    end
+
+    local attachment =
+        Instance.new(
+            "Attachment"
+        )
+
+    attachment.Name =
+        "CarRideAntiCentripetalAttachment"
+
+    attachment.Position =
+        Vector3.zero
+
+    attachment.Parent =
+        chassis
+
+    local vectorForce =
+        Instance.new(
+            "VectorForce"
+        )
+
+    vectorForce.Name =
+        "CarRideAntiCentripetalForce"
+
+    vectorForce.Attachment0 =
+        attachment
+
+    vectorForce.RelativeTo =
+        Enum.ActuatorRelativeTo.World
+
+    vectorForce.ApplyAtCenterOfMass =
+        true
+
+    vectorForce.Force =
+        Vector3.zero
+
+    vectorForce.Enabled =
+        true
+
+    vectorForce.Parent =
+        chassis
+
+    local data = {
+        Attachment =
+            attachment,
+
+        VectorForce =
+            vectorForce
+    }
+
+    State.AntiDescarrilhadorLateralForce =
+        data
+
+    return data
+end
+
+local function DestroyAntiLateralForce()
+    local data =
+        State.AntiDescarrilhadorLateralForce
+
+    if not data then
+        return
+    end
+
+    pcall(function()
+        if data.VectorForce then
+            data.VectorForce.Enabled =
+                false
+
+            data.VectorForce:Destroy()
+        end
+
+        if data.Attachment then
+            data.Attachment:Destroy()
+        end
+    end)
+
+    State.AntiDescarrilhadorLateralForce =
+        nil
+end
+
+local function UpdateAntiLateralForce(
+    chassis,
+    dt
+)
+    if not chassis
+        or not chassis.Parent then
+
+        DestroyAntiLateralForce()
+
+        State.AntiDescarrilhadorCurrentLateralForce =
+            0
+
+        State.AntiDescarrilhadorLastDirection =
+            nil
+
+        return false
+    end
+
+    if not dt
+        or dt <=
+        0 then
+        return false
+    end
+
+    local velocity =
+        chassis.AssemblyLinearVelocity
+
+    local speed =
+        velocity.Magnitude
+
+    if speed <=
+        0.1 then
+
+        local data =
+            CreateAntiLateralForce(
+                chassis
+            )
+
+        if data
+            and data.VectorForce then
+            data.VectorForce.Force =
+                Vector3.zero
+        end
+
+        State.AntiDescarrilhadorCurrentLateralForce =
+            0
+
+        State.AntiDescarrilhadorLastDirection =
+            nil
+
+        return true
+    end
+
+    local currentDirection =
+        velocity.Unit
+
+    local lastDirection =
+        State.AntiDescarrilhadorLastDirection
+
+    State.AntiDescarrilhadorLastDirection =
+        currentDirection
+
+    if not lastDirection then
+
+        local data =
+            CreateAntiLateralForce(
+                chassis
+            )
+
+        if data
+            and data.VectorForce then
+            data.VectorForce.Force =
+                Vector3.zero
+        end
+
+        State.AntiDescarrilhadorCurrentLateralForce =
+            0
+
+        return true
+    end
+
+    local deltaDir =
+        (
+            currentDirection -
+            lastDirection
+        ) /
+        dt
+
+    local chassisMass =
+        0
+
+    pcall(function()
+        chassisMass =
+            chassis.AssemblyMass
+    end)
+
+    if chassisMass <=
+        0 then
+        return false
+    end
+
+    local centripetalAcceleration =
+        speed *
+        deltaDir
+
+    local lateralForce =
+        centripetalAcceleration *
+        chassisMass *
+        Config.AntiDescarrilhador.CENTRIPETAL_FORCE_MULTIPLIER
+
+    local data =
+        CreateAntiLateralForce(
+            chassis
+        )
+
+    if not data
+        or not data.VectorForce then
+        return false
+    end
+
+    pcall(function()
+        data.VectorForce.Force =
+            lateralForce
+
+        data.VectorForce.RelativeTo =
+            Enum.ActuatorRelativeTo.World
+
+        data.VectorForce.ApplyAtCenterOfMass =
+            true
+
+        data.VectorForce.Enabled =
+            true
+    end)
+
+    State.AntiDescarrilhadorCurrentLateralForce =
+        lateralForce.Magnitude
+
+    return true
 end
 
 local function UpdateAntiDescarrilhadorGui()
@@ -6322,10 +6599,20 @@ local function UpdateAntiDescarrilhadorGui()
 
     if UI.AntiStatusForce then
         UI.AntiStatusForce.Text =
-            "Força atual: " ..
+            "Força vertical: " ..
             string.format(
                 "%.0f",
                 State.AntiDescarrilhadorCurrentForce
+                    or 0
+            )
+    end
+
+    if UI.AntiStatusLateralForce then
+        UI.AntiStatusLateralForce.Text =
+            "Força lateral: " ..
+            string.format(
+                "%.0f",
+                State.AntiDescarrilhadorCurrentLateralForce
                     or 0
             )
     end
@@ -6529,8 +6816,10 @@ function(
             cart
         )
 
-        ApplyAntiWheelForces(
-            referencePart
+        ApplyAntiWheelForces()
+        UpdateAntiLateralForce(
+            referencePart,
+            1 / 60
         )
     end
 
@@ -6763,10 +7052,23 @@ local function UpdateAntiMonitor(
 
         ApplyAntiWheelForces()
 
+        UpdateAntiLateralForce(
+            referencePart,
+            dt
+        )
+
     else
 
         State.AntiDescarrilhadorForcesActive =
             0
+
+        DestroyAntiLateralForce()
+
+        State.AntiDescarrilhadorCurrentLateralForce =
+            0
+
+        State.AntiDescarrilhadorLastDirection =
+            nil
     end
 
     if State.AntiDescarrilhadorLastGuiUpdate <=
