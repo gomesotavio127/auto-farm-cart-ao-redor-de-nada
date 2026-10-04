@@ -102,9 +102,9 @@ local Config = {
         TARGET_SPEED = 500,
         MAX_WHEELS = 8,
         WHEEL_FALLBACK_COUNT = 4,
-        RAIL_RAY_DISTANCE = 24,
+        RAIL_RAY_DISTANCE = 32,
         RAIL_SIDE_DISTANCE = 2,
-        WHEEL_RAIL_MAX_DISTANCE = 8,
+        WHEEL_RAIL_MAX_DISTANCE = 32,
         RAIL_TOP_NORMAL_MIN = 0.55,
         RAIL_SURFACE_MARGIN = 0.03,
         POSITION_RESPONSE = 60,
@@ -5379,6 +5379,17 @@ local function RestoreAntiCartPhysics()
                         data.PlaneVelocity
 
                 elseif data.ClassName ==
+                    "VehicleSeat" then
+
+                    local seat =
+                        controller.Instance
+
+                    if seat then
+                        seat.MaxSpeed =
+                            data.MaxSpeed
+                    end
+
+                elseif data.ClassName ==
                     "NumberValue" then
 
                     controller.Value =
@@ -6051,6 +6062,19 @@ local function FindAntiSpeedControllers(
             )
 
         elseif object:IsA(
+            "VehicleSeat"
+        ) then
+            table.insert(
+                controllers,
+                {
+                    ClassName =
+                        "VehicleSeat",
+                    Instance =
+                        object
+                }
+            )
+
+        elseif object:IsA(
             "NumberValue"
         ) then
 
@@ -6236,6 +6260,49 @@ local function ApplyAntiSpeedControllers(
                 targetSpeed
 
         elseif className ==
+            "VehicleSeat" then
+
+            local seat =
+                controller.Instance
+
+            if seat then
+                if not State.AntiDescarrilhadorOriginalSpeedValues[
+                    controller
+                ] then
+
+                    local original
+
+                    pcall(function()
+                        original =
+                            seat.MaxSpeed
+                    end)
+
+                    State.AntiDescarrilhadorOriginalSpeedValues[
+                        controller
+                    ] =
+                        {
+                            ClassName =
+                                "VehicleSeat",
+                            MaxSpeed =
+                                original
+                        }
+                end
+
+                pcall(function()
+                    seat.MaxSpeed =
+                        targetSpeed
+                end)
+
+                table.insert(
+                    State.AntiDescarrilhadorSpeedControllers,
+                    controller
+                )
+
+                State.AntiDescarrilhadorSpeedApplied =
+                    targetSpeed
+            end
+
+        elseif className ==
             "NumberValue" then
 
             if not State.AntiDescarrilhadorOriginalSpeedValues[
@@ -6342,19 +6409,13 @@ local function GetAntiPrimaryWheelHeightOffset(
         return nil
     end
 
-    local primaryToWheel =
+    local centerOffset =
         wheel.Position -
         referencePart.Position
 
-    local wheelBaseFromCenter =
-        -railNormal.Unit *
+    return centerOffset -
+        railNormal.Unit *
         (wheelRadius or 0)
-
-    local wheelBaseFromPrimary =
-        primaryToWheel +
-        wheelBaseFromCenter
-
-    return wheelBaseFromPrimary
 end
 
 local function GetAntiWheelAxle(
@@ -6575,29 +6636,10 @@ local function CreateAntiWheelConstraint(
             railNormal
         )
 
-    local baseOffsetFromPrimary =
-        GetAntiPrimaryWheelHeightOffset(
-            referencePart,
-            wheel,
-            railNormal,
-            radius
-        )
-
-    if not baseOffsetFromPrimary then
-        return nil
-    end
-
-    local targetPrimaryPosition =
-        hit.Position -
-        baseOffsetFromPrimary
-
-    local wheelPrimaryOffset =
-        wheel.Position -
-        referencePart.Position
-
     local targetWheelCenter =
-        targetPrimaryPosition +
-        wheelPrimaryOffset
+        hit.Position +
+        railNormal *
+        radius
 
     local wheelAttachment =
         Instance.new(
@@ -6921,29 +6963,10 @@ local function UpdateAntiWheelConstraint(
             railNormal
         )
 
-    local baseOffsetFromPrimary =
-        GetAntiPrimaryWheelHeightOffset(
-            referencePart,
-            wheel,
-            railNormal,
-            radius
-        )
-
-    if not baseOffsetFromPrimary then
-        return false
-    end
-
-    local targetPrimaryPosition =
-        hit.Position -
-        baseOffsetFromPrimary
-
-    local wheelPrimaryOffset =
-        wheel.Position -
-        referencePart.Position
-
     local targetWheelCenter =
-        targetPrimaryPosition +
-        wheelPrimaryOffset
+        hit.Position +
+        railNormal *
+        radius
 
     local assemblyMass =
         referencePart.AssemblyMass
@@ -7345,6 +7368,33 @@ function(
 
         State.AntiDescarrilhadorCurrentCart =
             cart
+    end
+
+    local referencePart =
+        SafeGetPrimaryPart(
+            cart
+        )
+
+    if referencePart
+        and referencePart.Parent then
+
+        State.AntiDescarrilhadorWheels =
+            GetAntiDescarrilhadorWheels(
+                cart,
+                referencePart
+            )
+
+        State.AntiDescarrilhadorLastScan =
+            os.clock()
+
+        ApplyAntiSpeedControllers(
+            cart
+        )
+
+        ApplyAntiTrackConstraints(
+            cart,
+            referencePart
+        )
     end
 
     return true
