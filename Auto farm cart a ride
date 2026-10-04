@@ -281,6 +281,8 @@ local State = {
     AntiDescarrilhadorSeatedConnection = nil,
     AntiDescarrilhadorSeatPropertyConnection = nil,
     AntiDescarrilhadorHumanoid = nil,
+    AntiDescarrilhadorLastLoggedSeated = nil,
+    AntiDescarrilhadorLastLoggedCart = nil,
     AntiDescarrilhadorLastVelocity = Vector3.zero,
     AntiDescarrilhadorLastPosition = nil,
     AntiDescarrilhadorIdleSince = nil,
@@ -6835,8 +6837,7 @@ function(
             resolvedSeat.Occupant
     end)
 
-    if occupant
-        and occupant ~= humanoid then
+    if occupant ~= humanoid then
         return nil
     end
 
@@ -6851,7 +6852,10 @@ function(
     end)
 
     if cart
-        and cart.Parent then
+        and cart.Parent
+        and cart:IsDescendantOf(
+            Workspace
+        ) then
         return cart
     end
 
@@ -6867,7 +6871,10 @@ function(
         end)
 
         if isModel
-            and ancestor.Parent then
+            and ancestor.Parent
+            and ancestor:IsDescendantOf(
+                Workspace
+            ) then
             cart =
                 ancestor
 
@@ -6883,11 +6890,70 @@ function(
     end
 
     if cart
-        and cart.Parent then
+        and cart.Parent
+        and cart:IsDescendantOf(
+            Workspace
+        ) then
         return cart
     end
 
     return nil
+end
+
+local function LogAntiDescarrilhadorState(
+    humanoid,
+    seatPart
+)
+    if not humanoid then
+        return
+    end
+
+    local cart =
+        GetSeatedCartFromHumanoid(
+            humanoid,
+            seatPart
+        )
+
+    local seated =
+        cart ~= nil
+
+    if seated then
+        if State.AntiDescarrilhadorLastLoggedSeated ~=
+            true
+            or State.AntiDescarrilhadorLastLoggedCart ~=
+            cart then
+
+            local cartName =
+                "Desconhecido"
+
+            pcall(function()
+                cartName =
+                    cart.Name
+            end)
+
+            print(
+                "[AntiDescarrilhador] Jogador sentado: true | Carrinho: " ..
+                tostring(
+                    cartName
+                )
+            )
+        end
+    elseif State.AntiDescarrilhadorLastLoggedSeated ~=
+        false then
+        print(
+            "[AntiDescarrilhador] Jogador sentado: false"
+        )
+    end
+
+    State.AntiDescarrilhadorLastLoggedSeated =
+        seated
+
+    State.AntiDescarrilhadorLastLoggedCart =
+        seated and cart or nil
+
+    return
+        seated,
+        cart
 end
 
 SyncAntiSeatedCart =
@@ -6955,6 +7021,12 @@ local function BindAntiHumanoid(
         humanoid
 
     if not humanoid then
+        State.AntiDescarrilhadorLastLoggedSeated =
+            nil
+
+        State.AntiDescarrilhadorLastLoggedCart =
+            nil
+
         return
     end
 
@@ -6962,6 +7034,11 @@ local function BindAntiHumanoid(
         Connect(
             humanoid.Seated,
             function(active, seatPart)
+                LogAntiDescarrilhadorState(
+                    humanoid,
+                    seatPart
+                )
+
                 if not State.AntiDescarrilhadorEnabled then
                     return
                 end
@@ -6984,23 +7061,41 @@ local function BindAntiHumanoid(
                 "SeatPart"
             ),
             function()
+                local seated,
+                    cart =
+                    LogAntiDescarrilhadorState(
+                        humanoid,
+                        nil
+                    )
+
                 if not State.AntiDescarrilhadorEnabled then
+                    return
+                end
+
+                if not seated
+                    or not cart then
+                    CleanupAntiCurrentCart()
                     return
                 end
 
                 SyncAntiSeatedCart(
                     humanoid,
-                    nil
+                    humanoid.SeatPart
                 )
             end
         )
 
-    -- CORREÇÃO: sincroniza imediatamente caso o jogador
-    -- já esteja sentado quando o anti-descarrilhador for ligado.
-    SyncAntiSeatedCart(
+    LogAntiDescarrilhadorState(
         humanoid,
         humanoid.SeatPart
     )
+
+    if State.AntiDescarrilhadorEnabled then
+        SyncAntiSeatedCart(
+            humanoid,
+            humanoid.SeatPart
+        )
+    end
 end
 
 local function SetupAntiCharacterWatcher()
@@ -7016,11 +7111,13 @@ local function SetupAntiCharacterWatcher()
         Connect(
             Player.CharacterAdded,
             function(character)
-                if not State.AntiDescarrilhadorEnabled then
-                    return
-                end
-
                 CleanupAntiCurrentCart()
+
+                State.AntiDescarrilhadorLastLoggedSeated =
+                    nil
+
+                State.AntiDescarrilhadorLastLoggedCart =
+                    nil
 
                 local humanoid
 
@@ -7700,6 +7797,27 @@ local guiCreated =
 
 if guiCreated then
     EnableInstantInteract()
+end
+
+SetupAntiCharacterWatcher()
+
+local initialHumanoid =
+    SafeGetHumanoid()
+
+if initialHumanoid then
+    BindAntiHumanoid(
+        initialHumanoid
+    )
+else
+    print(
+        "[AntiDescarrilhador] Jogador sentado: false"
+    )
+
+    State.AntiDescarrilhadorLastLoggedSeated =
+        false
+
+    State.AntiDescarrilhadorLastLoggedCart =
+        nil
 end
 
 StartAntiHeartbeat()
