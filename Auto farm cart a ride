@@ -5984,7 +5984,12 @@ local function GetAntiWheelTarget(
         normal.Unit
 
     local velocity =
-        wheel.AssemblyLinearVelocity
+        Vector3.zero
+
+    pcall(function()
+        velocity =
+            wheel.AssemblyLinearVelocity
+    end)
 
     local direction =
         Vector3.new(
@@ -5995,8 +6000,10 @@ local function GetAntiWheelTarget(
 
     if direction.Magnitude <
         0.5 then
-        direction =
-            wheel.CFrame.LookVector
+        pcall(function()
+            direction =
+                wheel.CFrame.LookVector
+        end)
     end
 
     local railDirection =
@@ -6049,11 +6056,23 @@ local function GetAntiWheelTarget(
         normal *
         radius
 
+    local axle =
+        tangent:Cross(
+            normal
+        )
+
+    if axle.Magnitude <
+        0.001 then
+        return nil
+    end
+
+    axle =
+        axle.Unit
+
     local targetCFrame =
-        CFrame.lookAt(
+        CFrame.fromMatrix(
             targetPosition,
-            targetPosition +
-            tangent,
+            axle,
             normal
         )
 
