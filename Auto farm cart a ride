@@ -5771,6 +5771,9 @@ local function GetAntiDescarrilhadorWheels(
                     object.Name
                 )
 
+            local identified =
+                false
+
             for _, keyword in ipairs(
                 keywords
             ) do
@@ -5783,6 +5786,9 @@ local function GetAntiDescarrilhadorWheels(
                     score +=
                         30
 
+                    identified =
+                        true
+
                     break
                 end
             end
@@ -5792,6 +5798,9 @@ local function GetAntiDescarrilhadorWheels(
             ] then
                 score +=
                     25
+
+                identified =
+                    true
             end
 
             local railHit =
@@ -5803,16 +5812,21 @@ local function GetAntiDescarrilhadorWheels(
             if railHit then
                 score +=
                     30
+
+                identified =
+                    true
             end
 
-            if object.Position.Y <
+            if identified
+                and object.Position.Y <
                 referencePart.Position.Y +
                 1 then
                 score +=
                     5
             end
 
-            if score >
+            if identified
+                and score >
                 0 then
                 table.insert(
                     candidates,
@@ -6099,7 +6113,12 @@ local function StickAntiWheelToTrack(
     end)
 
     local velocity =
-        wheel.AssemblyLinearVelocity
+        Vector3.zero
+
+    pcall(function()
+        velocity =
+            wheel.AssemblyLinearVelocity
+    end)
 
     local tangentSpeed =
         velocity:Dot(
@@ -6113,7 +6132,12 @@ local function StickAntiWheelToTrack(
     end)
 
     local angularVelocity =
-        wheel.AssemblyAngularVelocity
+        Vector3.zero
+
+    pcall(function()
+        angularVelocity =
+            wheel.AssemblyAngularVelocity
+    end)
 
     local axle =
         target.CFrame.RightVector
