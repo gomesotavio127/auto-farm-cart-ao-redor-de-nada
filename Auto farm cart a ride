@@ -5325,6 +5325,8 @@ local function SetupVisibilityKey()
 end
 
 
+local DestroyAntiLateralForce
+
 local function DestroyAntiWheelForce(
     wheel
 )
@@ -6380,7 +6382,8 @@ local function CreateAntiLateralForce(
     return data
 end
 
-local function DestroyAntiLateralForce()
+DestroyAntiLateralForce =
+function()
     local data =
         State.AntiDescarrilhadorLateralForce
 
