@@ -103,8 +103,8 @@ local Config = {
         MAX_WHEELS = 8,
         WHEEL_FALLBACK_COUNT = 4,
         DOWNFORCE_MULTIPLIER = 200,
-        SPEED_FORCE_K = 0.5,
-        UPRIGHT_TORQUE = 1000000,
+        SPEED_FORCE_K = 1,
+        UPRIGHT_TORQUE = 5000000,
         SCAN_INTERVAL = 0.10,
         GUI_UPDATE_INTERVAL = 0.1
     }
@@ -6113,6 +6113,73 @@ function()
     State.AntiDescarrilhadorUpright = nil
 end
 
+local function FindRailDirection(primary)
+    if not primary or not primary.Parent then
+        return nil
+    end
+
+    local origin = primary.Position
+    local look = primary.CFrame.LookVector
+    local flatLook = Vector3.new(look.X, 0, look.Z)
+
+    if flatLook.Magnitude < 0.01 then
+        return nil
+    end
+
+    flatLook = flatLook.Unit
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = { primary.Parent }
+
+    local forwardOrigin = origin + flatLook * 4 + Vector3.new(0, 3, 0)
+    local backwardOrigin = origin - flatLook * 4 + Vector3.new(0, 3, 0)
+
+    local forwardHit = Workspace:Raycast(forwardOrigin, Vector3.new(0, -20, 0), rayParams)
+    local backwardHit = Workspace:Raycast(backwardOrigin, Vector3.new(0, -20, 0), rayParams)
+
+    if forwardHit and backwardHit then
+        local dir = forwardHit.Position - backwardHit.Position
+        dir = Vector3.new(dir.X, 0, dir.Z)
+        if dir.Magnitude > 0.1 then
+            return dir.Unit
+        end
+    end
+
+    return nil
+end
+
+local function ProjectVelocityToRail(primary, railDir)
+    if not primary or not primary.Parent or not railDir then
+        return
+    end
+
+    local velocity
+    pcall(function()
+        velocity = primary.AssemblyLinearVelocity
+    end)
+
+    if not velocity then
+        return
+    end
+
+    local flatVel = Vector3.new(velocity.X, 0, velocity.Z)
+    local speed = flatVel.Magnitude
+
+    if speed < 1 then
+        return
+    end
+
+    local sign = flatVel:Dot(railDir) >= 0 and 1 or -1
+
+    pcall(function()
+        primary.AssemblyLinearVelocity =
+            railDir * speed * sign +
+            Vector3.new(0, velocity.Y, 0)
+    end)
+end
+
+
 local function UpdateAntiUpright()
     local data = State.AntiDescarrilhadorUpright
     if not data
@@ -6124,38 +6191,47 @@ local function UpdateAntiUpright()
 
     local primary = data.Primary
 
+    local railDir = FindRailDirection(primary)
+
+    if railDir then
+        ProjectVelocityToRail(primary, railDir)
+    end
+
     local position
-    local velocity
 
     pcall(function()
         position = primary.Position
-        velocity = primary.AssemblyLinearVelocity
     end)
 
     if not position then
         return
     end
 
-    local flatLook
+    local faceDir = railDir
 
-    if velocity and velocity.Magnitude > 1 then
-        flatLook = Vector3.new(velocity.X, 0, velocity.Z)
+    if not faceDir then
+        local velocity
+        pcall(function()
+            velocity = primary.AssemblyLinearVelocity
+        end)
 
-        if flatLook.Magnitude > 0.01 then
-            flatLook = flatLook.Unit
-        else
-            flatLook = nil
+        if velocity and velocity.Magnitude > 1 then
+            faceDir = Vector3.new(velocity.X, 0, velocity.Z)
+            if faceDir.Magnitude > 0.01 then
+                faceDir = faceDir.Unit
+            else
+                faceDir = nil
+            end
         end
     end
 
-    if not flatLook then
+    if not faceDir then
         local look = primary.CFrame.LookVector
-        flatLook = Vector3.new(look.X, 0, look.Z)
-
-        if flatLook.Magnitude > 0.01 then
-            flatLook = flatLook.Unit
+        faceDir = Vector3.new(look.X, 0, look.Z)
+        if faceDir.Magnitude > 0.01 then
+            faceDir = faceDir.Unit
         else
-            flatLook = Vector3.new(0, 0, -1)
+            faceDir = Vector3.new(0, 0, -1)
         end
     end
 
@@ -6163,7 +6239,7 @@ local function UpdateAntiUpright()
         data.Align.CFrame =
             CFrame.lookAt(
                 position,
-                position + flatLook,
+                position + faceDir,
                 Vector3.new(0, 1, 0)
             )
     end)
