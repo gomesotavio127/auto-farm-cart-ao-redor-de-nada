@@ -6053,66 +6053,31 @@ local function CreateAntiUpright(cart)
     end
 
     local primary = SafeGetPrimaryPart(cart)
+
     if not primary or not primary.Parent then
         return nil
     end
 
     if State.AntiDescarrilhadorUpright then
-        pcall(function()
-            if State.AntiDescarrilhadorUpright.Align then
-                State.AntiDescarrilhadorUpright.Align:Destroy()
-            end
-            if State.AntiDescarrilhadorUpright.Attachment then
-                State.AntiDescarrilhadorUpright.Attachment:Destroy()
-            end
-        end)
-        State.AntiDescarrilhadorUpright = nil
+        DestroyAntiUpright()
     end
 
-    local attachment = Instance.new("Attachment")
-    attachment.Name = "CarRideAntiUprightAttachment"
-    attachment.Position = Vector3.zero
-    attachment.Parent = primary
-
-    local align = Instance.new("AlignOrientation")
-    align.Name = "CarRideAntiUpright"
-    align.Attachment0 = attachment
-    align.Mode = Enum.OrientationAlignmentMode.OneAttachment
-    align.AlignType = Enum.AlignType.AllAxes
-    align.RigidityEnabled = false
-    align.MaxTorque = Config.AntiDescarrilhador.UPRIGHT_TORQUE
-    align.Responsiveness = 200
-    align.CFrame = primary.CFrame
-    align.Parent = primary
-
     State.AntiDescarrilhadorUpright = {
-        Attachment = attachment,
-        Align = align,
-        Primary = primary,
+        Primary = primary
     }
 
     return State.AntiDescarrilhadorUpright
 end
-
 DestroyAntiUpright =
 function()
     local data = State.AntiDescarrilhadorUpright
+
     if not data then
         return
     end
 
-    pcall(function()
-        if data.Align then
-            data.Align:Destroy()
-        end
-        if data.Attachment then
-            data.Attachment:Destroy()
-        end
-    end)
-
     State.AntiDescarrilhadorUpright = nil
 end
-
 local function FindRailDirection(primary)
     if not primary or not primary.Parent then
         return nil
@@ -6153,16 +6118,19 @@ end
 
 local function UpdateAntiUpright()
     local data = State.AntiDescarrilhadorUpright
+
     if not data
-        or not data.Align
         or not data.Primary
         or not data.Primary.Parent then
         return
     end
 
     local primary = data.Primary
-
     local railDir = FindRailDirection(primary)
+
+    if not railDir then
+        return
+    end
 
     local position
 
@@ -6174,41 +6142,16 @@ local function UpdateAntiUpright()
         return
     end
 
-    local faceDir = railDir
-
-    if not faceDir then
-        local velocity
-        pcall(function()
-            velocity = primary.AssemblyLinearVelocity
-        end)
-
-        if velocity and velocity.Magnitude > 1 then
-            faceDir = Vector3.new(velocity.X, 0, velocity.Z)
-            if faceDir.Magnitude > 0.01 then
-                faceDir = faceDir.Unit
-            else
-                faceDir = nil
-            end
-        end
-    end
-
-    if not faceDir then
-        local look = primary.CFrame.LookVector
-        faceDir = Vector3.new(look.X, 0, look.Z)
-        if faceDir.Magnitude > 0.01 then
-            faceDir = faceDir.Unit
-        else
-            faceDir = Vector3.new(0, 0, -1)
-        end
-    end
+    local targetCFrame =
+        CFrame.lookAt(
+            position,
+            position + railDir,
+            Vector3.new(0, 1, 0)
+        )
 
     pcall(function()
-        data.Align.CFrame =
-            CFrame.lookAt(
-                position,
-                position + faceDir,
-                Vector3.new(0, 1, 0)
-            )
+        primary.CFrame = targetCFrame
+        primary.AssemblyAngularVelocity = Vector3.zero
     end)
 end
 local function UpdateAntiWheelForce(
