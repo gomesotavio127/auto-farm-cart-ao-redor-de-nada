@@ -99,12 +99,14 @@ local Config = {
         StagePollInterval = 0.1
     },
     AntiDescarrilhador = {
+        TARGET_SPEED = 500,
         MAX_WHEELS = 8,
         WHEEL_FALLBACK_COUNT = 4,
-        RAIL_RAY_DISTANCE = 10,
-        RAIL_SIDE_DISTANCE = 7,
-        WHEEL_RAIL_MAX_DISTANCE = 8,
-        POSITION_RESPONSE = 35,
+        RAIL_RAY_DISTANCE = 14,
+        RAIL_SIDE_DISTANCE = 8,
+        WHEEL_RAIL_MAX_DISTANCE = 14,
+        POSITION_RESPONSE = 60,
+        ANCHOR_WHILE_SEATED = true,
         SCAN_INTERVAL = 0.25,
         GUI_UPDATE_INTERVAL = 0.1
     }
@@ -250,6 +252,11 @@ local State = {
     AntiDescarrilhadorLastLoggedSeated = nil,
     AntiDescarrilhadorLastLoggedCart = nil,
     AntiDescarrilhadorWheelsOnTrack = 0,
+    AntiDescarrilhadorSpeedApplied = nil,
+    AntiDescarrilhadorSpeedControllers = {},
+    AntiDescarrilhadorOriginalSpeedValues = {},
+    AntiDescarrilhadorOriginalAnchored = {},
+    AntiDescarrilhadorLastTargetCFrame = nil,
     AntiDescarrilhadorLastScan = 0,
     AntiDescarrilhadorLastGuiUpdate = 0
 }
@@ -292,7 +299,8 @@ local UI = {
     AntiStatusSeated = nil,
     AntiStatusCart = nil,
     AntiStatusWheels = nil,
-    AntiStatusStuck = nil,
+    AntiStatusSpeed = nil,
+    AntiStatusMode = nil,
     AntiStatusState = nil,
 
     RestorePill = nil,
@@ -4657,7 +4665,7 @@ local function CreatePages()
         CreateLabel(
             antiStatusPanel,
             "Wheels",
-            "Rodas encontradas: 0 | —",
+            "Rodas/guias encontradas: 0 | —",
             UDim2.new(
                 1,
                 -32,
@@ -4675,11 +4683,11 @@ local function CreatePages()
             Enum.Font.Gotham
         )
 
-    UI.AntiStatusStuck =
+    UI.AntiStatusSpeed =
         CreateLabel(
             antiStatusPanel,
-            "Stuck",
-            "Rodas grudadas no trilho: 0 / 0",
+            "Speed",
+            "Velocidade máxima aplicada: —",
             UDim2.new(
                 1,
                 -32,
@@ -4691,6 +4699,28 @@ local function CreatePages()
                 16,
                 0,
                 134
+            ),
+            9,
+            COR_TEXTO_SECUNDARIO,
+            Enum.Font.GothamMedium
+        )
+
+    UI.AntiStatusMode =
+        CreateLabel(
+            antiStatusPanel,
+            "Mode",
+            "Modo anti-derail (CFrame/Anchor): inativo",
+            UDim2.new(
+                1,
+                -32,
+                0,
+                24
+            ),
+            UDim2.new(
+                0,
+                16,
+                0,
+                160
             ),
             9,
             COR_TEXTO_SECUNDARIO,
@@ -4712,7 +4742,7 @@ local function CreatePages()
                 0,
                 16,
                 0,
-                174
+                186
             ),
             9,
             COR_TEXTO_TERCEARIO,
@@ -5248,7 +5278,78 @@ local function SetupVisibilityKey()
     )
 end
 
+local function RestoreAntiCartPhysics()
+    for part, anchored in pairs(
+        State.AntiDescarrilhadorOriginalAnchored
+    ) do
+        if part
+            and part.Parent then
+            pcall(function()
+                part.Anchored =
+                    anchored
+            end)
+        end
+    end
+
+    table.clear(
+        State.AntiDescarrilhadorOriginalAnchored
+    )
+
+    for controller, data in pairs(
+        State.AntiDescarrilhadorOriginalSpeedValues
+    ) do
+        if controller
+            and controller.Parent
+            and data then
+            pcall(function()
+                if data.ClassName ==
+                    "LinearVelocity" then
+                    controller.ForceLimitsEnabled =
+                        data.ForceLimitsEnabled
+
+                    controller.VelocityConstraintMode =
+                        data.VelocityConstraintMode
+
+                    controller.VectorVelocity =
+                        data.VectorVelocity
+
+                    controller.LineVelocity =
+                        data.LineVelocity
+
+                    controller.PlaneVelocity =
+                        data.PlaneVelocity
+
+                elseif data.ClassName ==
+                    "NumberValue" then
+                    controller.Value =
+                        data.Value
+
+                elseif data.ClassName ==
+                    "Attribute" then
+                    controller:SetAttribute(
+                        data.Attribute,
+                        data.Value
+                    )
+                end
+            end)
+        end
+    end
+
+    table.clear(
+        State.AntiDescarrilhadorOriginalSpeedValues
+    )
+
+    table.clear(
+        State.AntiDescarrilhadorSpeedControllers
+    )
+
+    State.AntiDescarrilhadorSpeedApplied =
+        nil
+end
+
 local function CleanupAntiCurrentCart()
+    RestoreAntiCartPhysics()
+
     table.clear(
         State.AntiDescarrilhadorWheels
     )
@@ -5258,12 +5359,19 @@ local function CleanupAntiCurrentCart()
 
     State.AntiDescarrilhadorWheelsOnTrack =
         0
+
+    State.AntiDescarrilhadorLastTargetCFrame =
+        nil
+
+    State.AntiDescarrilhadorLastScan =
+        0
 end
 
 local function IsAntiBasePart(
     object
 )
-    local result = false
+    local result =
+        false
 
     pcall(function()
         result =
@@ -5366,7 +5474,7 @@ local function IsAntiTrackLikePart(
     if material ==
         Enum.Material.Metal
         and largest >= 3
-        and smallest <= 3 then
+        and smallest <= 2 then
         return true
     end
 
@@ -5447,6 +5555,18 @@ local function GetAntiRailDirection(
     end
 
     direction =
+        Vector3.new(
+            direction.X,
+            0,
+            direction.Z
+        )
+
+    if direction.Magnitude <
+        0.001 then
+        return nil
+    end
+
+    direction =
         direction.Unit
 
     if referenceDirection
@@ -5460,6 +5580,92 @@ local function GetAntiRailDirection(
     return direction
 end
 
+local function FindAntiRailNearPoint(
+    origin,
+    cart
+)
+    if not origin then
+        return nil
+    end
+
+    local params =
+        GetAntiRaycastParams(
+            cart
+        )
+
+    local directions = {
+        Vector3.new(
+            0,
+            -1,
+            0
+        ),
+        Vector3.new(
+            1,
+            -0.25,
+            0
+        ),
+        Vector3.new(
+            -1,
+            -0.25,
+            0
+        ),
+        Vector3.new(
+            0,
+            -0.25,
+            1
+        ),
+        Vector3.new(
+            0,
+            -0.25,
+            -1
+        )
+    }
+
+    local best
+    local bestDistance =
+        math.huge
+
+    for _, direction in ipairs(
+        directions
+    ) do
+        local result
+
+        pcall(function()
+            result =
+                Workspace:Raycast(
+                    origin,
+                    direction.Unit *
+                    Config.AntiDescarrilhador.RAIL_RAY_DISTANCE,
+                    params
+                )
+        end)
+
+        if result
+            and result.Instance
+            and IsAntiTrackLikePart(
+                result.Instance
+            ) then
+
+            local distance =
+                (
+                    result.Position -
+                    origin
+                ).Magnitude
+
+            if distance <
+                bestDistance then
+                bestDistance =
+                    distance
+
+                best =
+                    result
+            end
+        end
+    end
+
+    return best
+end
+
 local function FindAntiRailNearWheel(
     wheel,
     cart
@@ -5469,76 +5675,14 @@ local function FindAntiRailNearWheel(
         return nil
     end
 
-    local params =
-        GetAntiRaycastParams(
+    local hit =
+        FindAntiRailNearPoint(
+            wheel.Position,
             cart
         )
 
-    local origin =
-        wheel.Position
-
-    local axes = {
-        Vector3.new(
-            0,
-            -1,
-            0
-        ),
-        -wheel.CFrame.UpVector,
-        wheel.CFrame.RightVector,
-        -wheel.CFrame.RightVector,
-        wheel.CFrame.LookVector,
-        -wheel.CFrame.LookVector
-    }
-
-    local bestResult
-    local bestDistance =
-        math.huge
-
-    for _, axis in ipairs(
-        axes
-    ) do
-        if axis
-            and axis.Magnitude >
-            0.001 then
-
-            local result
-
-            pcall(function()
-                result =
-                    Workspace:Raycast(
-                        origin,
-                        axis.Unit *
-                        Config.AntiDescarrilhador.RAIL_RAY_DISTANCE,
-                        params
-                    )
-            end)
-
-            if result
-                and result.Instance
-                and IsAntiTrackLikePart(
-                    result.Instance
-                ) then
-
-                local distance =
-                    (
-                        result.Position -
-                        origin
-                    ).Magnitude
-
-                if distance <
-                    bestDistance then
-                    bestDistance =
-                        distance
-
-                    bestResult =
-                        result
-                end
-            end
-        end
-    end
-
-    if bestResult then
-        return bestResult
+    if hit then
+        return hit
     end
 
     local overlapParams =
@@ -5547,22 +5691,9 @@ local function FindAntiRailNearWheel(
     overlapParams.FilterType =
         Enum.RaycastFilterType.Exclude
 
-    local overlapExclude = {
+    overlapParams.FilterDescendantsInstances = {
         cart
     }
-
-    local character =
-        SafeGetCharacter()
-
-    if character then
-        table.insert(
-            overlapExclude,
-            character
-        )
-    end
-
-    overlapParams.FilterDescendantsInstances =
-        overlapExclude
 
     local nearby = {}
 
@@ -5570,7 +5701,7 @@ local function FindAntiRailNearWheel(
         nearby =
             Workspace:GetPartBoundsInBox(
                 CFrame.new(
-                    origin
+                    wheel.Position
                 ),
                 Vector3.new(
                     Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE,
@@ -5594,7 +5725,7 @@ local function FindAntiRailNearWheel(
             local distance =
                 (
                     part.Position -
-                    origin
+                    wheel.Position
                 ).Magnitude
 
             if distance <
@@ -5611,7 +5742,7 @@ local function FindAntiRailNearWheel(
     if nearest then
         local direction =
             nearest.Position -
-            origin
+            wheel.Position
 
         if direction.Magnitude >
             0.001 then
@@ -5621,7 +5752,7 @@ local function FindAntiRailNearWheel(
             pcall(function()
                 result =
                     Workspace:Raycast(
-                        origin,
+                        wheel.Position,
                         direction,
                         params
                     )
@@ -5638,6 +5769,35 @@ local function FindAntiRailNearWheel(
     end
 
     return nil
+end
+
+local function GetAntiWheelRadius(
+    wheel
+)
+    local size =
+        Vector3.one
+
+    pcall(function()
+        size =
+            wheel.Size
+    end)
+
+    local values = {
+        size.X,
+        size.Y,
+        size.Z
+    }
+
+    table.sort(
+        values
+    )
+
+    return math.clamp(
+        values[2] *
+        0.5,
+        0.05,
+        8
+    )
 end
 
 local function GetAntiDescarrilhadorWheels(
@@ -5700,6 +5860,7 @@ local function GetAntiDescarrilhadorWheels(
                 ] =
                     true
             end
+
         elseif object:IsA(
             "Motor6D"
         ) then
@@ -5736,9 +5897,6 @@ local function GetAntiDescarrilhadorWheels(
         end
     end
 
-    local candidates =
-        {}
-
     local keywords = {
         "wheel",
         "wheels",
@@ -5748,11 +5906,18 @@ local function GetAntiDescarrilhadorWheels(
         "tyre",
         "pneu",
         "pneus",
+        "guide",
+        "guides",
+        "guia",
+        "guias",
         "hitbox",
         "bogie",
         "truck",
         "axle"
     }
+
+    local candidates =
+        {}
 
     for _, object in ipairs(
         descendants
@@ -5761,7 +5926,7 @@ local function GetAntiDescarrilhadorWheels(
             object
         )
             and object ~=
-                referencePart then
+            referencePart then
 
             local score =
                 0
@@ -5770,9 +5935,6 @@ local function GetAntiDescarrilhadorWheels(
                 Normalize(
                     object.Name
                 )
-
-            local identified =
-                false
 
             for _, keyword in ipairs(
                 keywords
@@ -5784,11 +5946,7 @@ local function GetAntiDescarrilhadorWheels(
                     true
                 ) then
                     score +=
-                        30
-
-                    identified =
-                        true
-
+                        35
                     break
                 end
             end
@@ -5797,42 +5955,33 @@ local function GetAntiDescarrilhadorWheels(
                 object
             ] then
                 score +=
-                    25
-
-                identified =
-                    true
-            end
-
-            local railHit =
-                FindAntiRailNearWheel(
-                    object,
-                    cart
-                )
-
-            if railHit then
-                score +=
                     30
-
-                identified =
-                    true
             end
 
-            if identified
-                and object.Position.Y <
+            if FindAntiRailNearWheel(
+                object,
+                cart
+            ) then
+                score +=
+                    35
+            end
+
+            if object.Position.Y <
                 referencePart.Position.Y +
                 1 then
                 score +=
                     5
             end
 
-            if identified
-                and score >
+            if score >
                 0 then
                 table.insert(
                     candidates,
                     {
-                        Part = object,
-                        Score = score
+                        Part =
+                            object,
+                        Score =
+                            score
                     }
                 )
             end
@@ -5896,7 +6045,7 @@ local function GetAntiDescarrilhadorWheels(
                 object
             )
                 and object ~=
-                    referencePart
+                referencePart
                 and not used[
                     object
                 ]
@@ -5956,220 +6105,608 @@ local function GetAntiWheelsText()
         )
 end
 
-local function GetAntiWheelTarget(
-    wheel,
+local function FindAntiSpeedControllers(
     cart
 )
-    local hit =
-        FindAntiRailNearWheel(
-            wheel,
+    local controllers =
+        {}
+
+    if not cart
+        or not cart.Parent then
+        return controllers
+    end
+
+    local descendants
+
+    pcall(function()
+        descendants =
+            cart:GetDescendants()
+    end)
+
+    if not descendants then
+        return controllers
+    end
+
+    for _, object in ipairs(
+        descendants
+    ) do
+        if object:IsA(
+            "LinearVelocity"
+        ) then
+            table.insert(
+                controllers,
+                object
+            )
+
+        elseif object:IsA(
+            "NumberValue"
+        ) then
+
+            local name =
+                Normalize(
+                    object.Name
+                )
+
+            if name ==
+                "maxspeed"
+                or name ==
+                "topspeed" then
+                table.insert(
+                    controllers,
+                    object
+                )
+            end
+        end
+    end
+
+    for _, attributeName in ipairs(
+        {
+            "MaxSpeed",
+            "TopSpeed"
+        }
+    ) do
+
+        local value
+        local exists =
+            false
+
+        pcall(function()
+            value =
+                cart:GetAttribute(
+                    attributeName
+                )
+
+            exists =
+                value ~= nil
+        end)
+
+        if exists then
+            table.insert(
+                controllers,
+                {
+                    ClassName =
+                        "Attribute",
+                    Instance =
+                        cart,
+                    Attribute =
+                        attributeName
+                }
+            )
+        end
+    end
+
+    return controllers
+end
+
+local function ApplyAntiSpeedControllers(
+    cart
+)
+    local controllers =
+        FindAntiSpeedControllers(
             cart
         )
 
-    if not hit
-        or not hit.Instance then
+    table.clear(
+        State.AntiDescarrilhadorSpeedControllers
+    )
+
+    State.AntiDescarrilhadorSpeedApplied =
+        nil
+
+    local targetSpeed =
+        Config.AntiDescarrilhador.TARGET_SPEED
+
+    for _, controller in ipairs(
+        controllers
+    ) do
+        local className
+
+        pcall(function()
+            className =
+                controller.ClassName
+        end)
+
+        if className ==
+            "LinearVelocity" then
+
+            if not State.AntiDescarrilhadorOriginalSpeedValues[
+                controller
+            ] then
+
+                local original = {
+                    ClassName =
+                        "LinearVelocity",
+                    ForceLimitsEnabled =
+                        controller.ForceLimitsEnabled,
+                    VelocityConstraintMode =
+                        controller.VelocityConstraintMode,
+                    VectorVelocity =
+                        controller.VectorVelocity,
+                    LineVelocity =
+                        controller.LineVelocity,
+                    PlaneVelocity =
+                        controller.PlaneVelocity
+                }
+
+                State.AntiDescarrilhadorOriginalSpeedValues[
+                    controller
+                ] =
+                    original
+            end
+
+            pcall(function()
+                controller.ForceLimitsEnabled =
+                    false
+            end)
+
+            local mode
+
+            pcall(function()
+                mode =
+                    controller.VelocityConstraintMode
+            end)
+
+            if mode ==
+                Enum.VelocityConstraintMode.Line then
+
+                pcall(function()
+                    controller.LineVelocity =
+                        targetSpeed
+                end)
+
+            elseif mode ==
+                Enum.VelocityConstraintMode.Plane then
+
+                local planeVelocity =
+                    Vector2.new(
+                        targetSpeed,
+                        0
+                    )
+
+                pcall(function()
+                    controller.PlaneVelocity =
+                        planeVelocity
+                end)
+
+            else
+
+                local direction =
+                    Vector3.new(
+                        0,
+                        0,
+                        -1
+                    )
+
+                pcall(function()
+                    local vector =
+                        controller.VectorVelocity
+
+                    if vector.Magnitude >
+                        0.1 then
+                        direction =
+                            vector.Unit
+                    end
+                end)
+
+                pcall(function()
+                    controller.VectorVelocity =
+                        direction *
+                        targetSpeed
+                end)
+            end
+
+            table.insert(
+                State.AntiDescarrilhadorSpeedControllers,
+                controller
+            )
+
+            State.AntiDescarrilhadorSpeedApplied =
+                targetSpeed
+
+        elseif className ==
+            "NumberValue" then
+
+            if not State.AntiDescarrilhadorOriginalSpeedValues[
+                controller
+            ] then
+
+                State.AntiDescarrilhadorOriginalSpeedValues[
+                    controller
+                ] =
+                    {
+                        ClassName =
+                            "NumberValue",
+                        Value =
+                            controller.Value
+                    }
+            end
+
+            pcall(function()
+                controller.Value =
+                    targetSpeed
+            end)
+
+            table.insert(
+                State.AntiDescarrilhadorSpeedControllers,
+                controller
+            )
+
+            State.AntiDescarrilhadorSpeedApplied =
+                targetSpeed
+
+        elseif className ==
+            "Attribute" then
+
+            local instance =
+                controller.Instance
+
+            local attribute =
+                controller.Attribute
+
+            if instance
+                and attribute then
+
+                if not State.AntiDescarrilhadorOriginalSpeedValues[
+                    controller
+                ] then
+
+                    local original
+
+                    pcall(function()
+                        original =
+                            instance:GetAttribute(
+                                attribute
+                            )
+                    end)
+
+                    State.AntiDescarrilhadorOriginalSpeedValues[
+                        controller
+                    ] =
+                        {
+                            ClassName =
+                                "Attribute",
+                            Attribute =
+                                attribute,
+                            Value =
+                                original
+                        }
+                end
+
+                pcall(function()
+                    instance:SetAttribute(
+                        attribute,
+                        targetSpeed
+                    )
+                end)
+
+                State.AntiDescarrilhadorSpeedApplied =
+                    targetSpeed
+            end
+        end
+    end
+
+    return
+        State.AntiDescarrilhadorSpeedApplied
+end
+
+local function AnchorAntiCart(
+    cart
+)
+    if not Config.AntiDescarrilhador.ANCHOR_WHILE_SEATED
+        or not cart
+        or not cart.Parent then
+        return
+    end
+
+    for _, object in ipairs(
+        cart:GetDescendants()
+    ) do
+        if IsAntiBasePart(
+            object
+        ) then
+
+            if State.AntiDescarrilhadorOriginalAnchored[
+                object
+            ] == nil then
+
+                local original =
+                    false
+
+                pcall(function()
+                    original =
+                        object.Anchored
+                end)
+
+                State.AntiDescarrilhadorOriginalAnchored[
+                    object
+                ] =
+                    original
+            end
+
+            pcall(function()
+                object.Anchored =
+                    true
+            end)
+        end
+    end
+end
+
+local function GetAntiTargetCFrame(
+    cart,
+    referencePart
+)
+    if not cart
+        or not cart.Parent
+        or not referencePart then
         return nil
     end
 
-    local normal =
-        hit.Normal
+    local pivot =
+        cart:GetPivot()
 
-    if not normal
-        or normal.Magnitude <
-        0.001 then
-        return nil
-    end
-
-    normal =
-        normal.Unit
-
-    local velocity =
-        Vector3.zero
-
-    pcall(function()
-        velocity =
-            wheel.AssemblyLinearVelocity
-    end)
-
-    local direction =
+    local forward =
         Vector3.new(
-            velocity.X,
-            velocity.Y,
-            velocity.Z
+            pivot.LookVector.X,
+            0,
+            pivot.LookVector.Z
         )
 
-    if direction.Magnitude <
-        0.5 then
-        pcall(function()
-            direction =
-                wheel.CFrame.LookVector
-        end)
+    if forward.Magnitude <
+        0.001 then
+        forward =
+            Vector3.new(
+                0,
+                0,
+                -1
+            )
+    else
+        forward =
+            forward.Unit
+    end
+
+    local hits =
+        {}
+
+    for _, wheel in ipairs(
+        State.AntiDescarrilhadorWheels
+    ) do
+        if wheel
+            and wheel.Parent then
+
+            local hit =
+                FindAntiRailNearWheel(
+                    wheel,
+                    cart
+                )
+
+            if hit
+                and hit.Normal.Magnitude >
+                0.001 then
+
+                local radius =
+                    GetAntiWheelRadius(
+                        wheel
+                    )
+
+                table.insert(
+                    hits,
+                    {
+                        Wheel =
+                            wheel,
+                        Hit =
+                            hit,
+                        Position =
+                            hit.Position +
+                            hit.Normal.Unit *
+                            radius
+                    }
+                )
+            end
+        end
+    end
+
+    if #hits ==
+        0 then
+        local hit =
+            FindAntiRailNearPoint(
+                referencePart.Position,
+                cart
+            )
+
+        if hit
+            and hit.Normal.Magnitude >
+            0.001 then
+
+            table.insert(
+                hits,
+                {
+                    Wheel =
+                        nil,
+                    Hit =
+                        hit,
+                    Position =
+                        hit.Position +
+                        hit.Normal.Unit *
+                        (
+                            referencePart.Size.Y *
+                            0.5
+                        )
+                }
+            )
+        end
+    end
+
+    if #hits ==
+        0 then
+        return nil
+    end
+
+    local directionSum =
+        Vector3.zero
+
+    for _, data in ipairs(
+        hits
+    ) do
+        local direction =
+            GetAntiRailDirection(
+                data.Hit.Instance,
+                forward
+            )
+
+        if direction then
+            directionSum +=
+                direction
+        end
+    end
+
+    if directionSum.Magnitude <
+        0.001 then
+        directionSum =
+            forward
     end
 
     local railDirection =
-        GetAntiRailDirection(
-            hit.Instance,
-            direction
+        directionSum.Unit
+
+    local targetYaw =
+        CFrame.lookAt(
+            Vector3.zero,
+            railDirection,
+            Vector3.new(
+                0,
+                1,
+                0
+            )
         )
 
-    if not railDirection then
-        return nil
+    local targetPositionSum =
+        Vector3.zero
+
+    local samples =
+        0
+
+    for _, data in ipairs(
+        hits
+    ) do
+        if data.Wheel then
+            local localWheel =
+                pivot:ToObjectSpace(
+                    data.Wheel.CFrame
+                )
+
+            local rotated =
+                targetYaw:VectorToWorldSpace(
+                    localWheel.Position
+                )
+
+            targetPositionSum +=
+                data.Position -
+                rotated
+
+            samples +=
+                1
+        end
     end
 
-    local tangent =
-        railDirection -
-        normal *
-        railDirection:Dot(
-            normal
-        )
+    local targetPosition
 
-    if tangent.Magnitude <
-        0.001 then
-        return nil
-    end
-
-    tangent =
-        tangent.Unit
-
-    local size =
-        wheel.Size
-
-    local values = {
-        size.X,
-        size.Y,
-        size.Z
-    }
-
-    table.sort(
-        values
-    )
-
-    local radius =
-        math.clamp(
-            values[2] * 0.5,
-            0.05,
-            8
-        )
-
-    local targetPosition =
-        hit.Position +
-        normal *
-        radius
-
-    local axle =
-        tangent:Cross(
-            normal
-        )
-
-    if axle.Magnitude <
-        0.001 then
-        return nil
-    end
-
-    axle =
-        axle.Unit
-
-    local targetCFrame =
-        CFrame.fromMatrix(
-            targetPosition,
-            axle,
-            normal
-        )
-
-    return {
-        CFrame =
-            targetCFrame,
-        Position =
-            targetPosition,
-        Normal =
-            normal,
-        Direction =
-            tangent,
-        Distance =
+    if samples >
+        0 then
+        targetPosition =
+            targetPositionSum /
+            samples
+    else
+        targetPosition =
+            pivot.Position +
             (
-                wheel.Position -
-                targetPosition
-            ).Magnitude
-    }
+                hits[1].Position -
+                referencePart.Position
+            )
+    end
+
+    return
+        CFrame.new(
+            targetPosition
+        ) *
+        targetYaw
 end
 
-local function StickAntiWheelToTrack(
-    wheel,
-    target,
+local function ApplyAntiCFrame(
+    cart,
+    referencePart,
     dt
 )
-    if not wheel
-        or not wheel.Parent
-        or not target then
+    if not cart
+        or not referencePart then
         return false
     end
 
-    if target.Distance >
-        Config.AntiDescarrilhador.WHEEL_RAIL_MAX_DISTANCE then
+    AnchorAntiCart(
+        cart
+    )
+
+    local target =
+        GetAntiTargetCFrame(
+            cart,
+            referencePart
+        )
+
+    if not target then
         return false
     end
+
+    local current =
+        cart:GetPivot()
 
     local alpha =
         math.clamp(
             (dt or 0.016) *
             Config.AntiDescarrilhador.POSITION_RESPONSE,
-            0.4,
+            0.9,
             1
         )
 
-    if target.Distance >=
-        Config.AntiDescarrilhador.SNAP_DISTANCE then
-        alpha =
-            1
-    end
-
-    pcall(function()
-        wheel.CFrame =
-            wheel.CFrame:Lerp(
-                target.CFrame,
-                alpha
-            )
-    end)
-
-    local velocity =
-        Vector3.zero
-
-    pcall(function()
-        velocity =
-            wheel.AssemblyLinearVelocity
-    end)
-
-    local tangentSpeed =
-        velocity:Dot(
-            target.Direction
+    local corrected =
+        current:Lerp(
+            target,
+            alpha
         )
 
     pcall(function()
-        wheel.AssemblyLinearVelocity =
-            target.Direction *
-            tangentSpeed
-    end)
-
-    local angularVelocity =
-        Vector3.zero
-
-    pcall(function()
-        angularVelocity =
-            wheel.AssemblyAngularVelocity
-    end)
-
-    local axle =
-        target.CFrame.RightVector
-
-    local spin =
-        angularVelocity:Dot(
-            axle
+        cart:PivotTo(
+            corrected
         )
+    end)
+
+    State.AntiDescarrilhadorLastTargetCFrame =
+        corrected
 
     pcall(function()
-        wheel.AssemblyAngularVelocity =
-            axle *
-            spin
+        referencePart.AssemblyLinearVelocity =
+            Vector3.zero
+
+        referencePart.AssemblyAngularVelocity =
+            Vector3.zero
     end)
 
     return true
@@ -6209,20 +6746,44 @@ local function UpdateAntiDescarrilhadorGui()
 
     if UI.AntiStatusWheels then
         UI.AntiStatusWheels.Text =
-            "Rodas encontradas: " ..
+            "Rodas/guias encontradas: " ..
             GetAntiWheelsText()
     end
 
-    if UI.AntiStatusStuck then
-        UI.AntiStatusStuck.Text =
-            "Rodas grudadas no trilho: " ..
-            tostring(
-                State.AntiDescarrilhadorWheelsOnTrack
-            ) ..
-            " / " ..
-            tostring(
-                #State.AntiDescarrilhadorWheels
-            )
+    if UI.AntiStatusSpeed then
+        local speedText =
+            "—"
+
+        if State.AntiDescarrilhadorSpeedApplied then
+            speedText =
+                string.format(
+                    "%.0f",
+                    State.AntiDescarrilhadorSpeedApplied
+                )
+        else
+            speedText =
+                "nenhum controlador"
+        end
+
+        UI.AntiStatusSpeed.Text =
+            "Velocidade máxima aplicada: " ..
+            speedText
+    end
+
+    if UI.AntiStatusMode then
+        local active =
+            State.AntiDescarrilhadorEnabled
+            and cart ~= nil
+
+        UI.AntiStatusMode.Text =
+            active
+            and "Modo anti-derail (CFrame/Anchor): ativo"
+            or "Modo anti-derail (CFrame/Anchor): inativo"
+
+        UI.AntiStatusMode.TextColor3 =
+            active
+            and COR_VERDE_2
+            or COR_TEXTO_TERCEARIO
     end
 
     if UI.AntiStatusState then
@@ -6269,8 +6830,12 @@ function(
 
     pcall(function()
         isSeat =
-            resolvedSeat:IsA("Seat")
-            or resolvedSeat:IsA("VehicleSeat")
+            resolvedSeat:IsA(
+                "Seat"
+            )
+            or resolvedSeat:IsA(
+                "VehicleSeat"
+            )
     end)
 
     if not isSeat then
@@ -6342,6 +6907,7 @@ local function LogAntiDescarrilhadorState(
         end
     elseif State.AntiDescarrilhadorLastLoggedSeated ~=
         false then
+
         print(
             "[AntiDescarrilhador] Jogador sentado: false"
         )
@@ -6378,8 +6944,13 @@ function(
         return false
     end
 
-    State.AntiDescarrilhadorCurrentCart =
-        cart
+    if State.AntiDescarrilhadorCurrentCart ~=
+        cart then
+        CleanupAntiCurrentCart()
+
+        State.AntiDescarrilhadorCurrentCart =
+            cart
+    end
 
     return true
 end
@@ -6467,8 +7038,12 @@ local function BindAntiHumanoid(
                     return
                 end
 
-                State.AntiDescarrilhadorCurrentCart =
-                    cart
+                if State.AntiDescarrilhadorEnabled then
+                    SyncAntiSeatedCart(
+                        humanoid,
+                        humanoid.SeatPart
+                    )
+                end
             end
         )
 
@@ -6587,29 +7162,37 @@ local function UpdateAntiMonitor(
             now
     end
 
-    State.AntiDescarrilhadorWheelsOnTrack =
-        0
-
     if State.AntiDescarrilhadorEnabled then
-        for _, wheel in ipairs(
-            State.AntiDescarrilhadorWheels
-        ) do
-            local target =
-                GetAntiWheelTarget(
+        ApplyAntiSpeedControllers(
+            cart
+        )
+
+        local applied =
+            ApplyAntiCFrame(
+                cart,
+                referencePart,
+                dt
+            )
+
+        State.AntiDescarrilhadorWheelsOnTrack =
+            0
+
+        if applied then
+            for _, wheel in ipairs(
+                State.AntiDescarrilhadorWheels
+            ) do
+                if FindAntiRailNearWheel(
                     wheel,
                     cart
-                )
-
-            if target
-                and StickAntiWheelToTrack(
-                    wheel,
-                    target,
-                    dt
                 ) then
-                State.AntiDescarrilhadorWheelsOnTrack +=
-                    1
+                    State.AntiDescarrilhadorWheelsOnTrack +=
+                        1
+                end
             end
         end
+    else
+        State.AntiDescarrilhadorWheelsOnTrack =
+            0
     end
 
     if State.AntiDescarrilhadorLastGuiUpdate <=
@@ -6687,8 +7270,7 @@ local function DisableAntiDescarrilhador()
     State.AntiDescarrilhadorEnabled =
         false
 
-    State.AntiDescarrilhadorWheelsOnTrack =
-        0
+    CleanupAntiCurrentCart()
 
     SetAntiToggleVisual(
         false
