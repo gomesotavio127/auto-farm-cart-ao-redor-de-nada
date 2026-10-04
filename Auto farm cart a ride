@@ -103,6 +103,8 @@ local Config = {
         MAX_WHEELS = 8,
         WHEEL_FALLBACK_COUNT = 4,
         DOWNFORCE_MULTIPLIER = 200,
+        SPEED_FORCE_K = 0.5,
+        UPRIGHT_TORQUE = 1000000,
         SCAN_INTERVAL = 0.10,
         GUI_UPDATE_INTERVAL = 0.1
     }
@@ -248,6 +250,7 @@ local State = {
     AntiDescarrilhadorLastLoggedSeated = nil,
     AntiDescarrilhadorLastLoggedCart = nil,
     AntiDescarrilhadorForcesActive = 0,
+    AntiDescarrilhadorUpright = nil,
     AntiDescarrilhadorSpeedApplied = nil,
     AntiDescarrilhadorSpeedControllers = {},
     AntiDescarrilhadorOriginalSpeedValues = {},
@@ -5228,6 +5231,8 @@ local function SetupVisibilityKey()
 end
 
 
+local DestroyAntiUpright
+
 local function DestroyAntiWheelForce(
     wheel
 )
@@ -5366,6 +5371,7 @@ end
 
 local function CleanupAntiCurrentCart()
     RestoreAntiCartPhysics()
+    DestroyAntiUpright()
 
     table.clear(
         State.AntiDescarrilhadorWheels
@@ -6041,6 +6047,128 @@ local function CreateAntiWheelForce(
     return data
 end
 
+local function CreateAntiUpright(cart)
+    if not cart or not cart.Parent then
+        return nil
+    end
+
+    local primary = SafeGetPrimaryPart(cart)
+    if not primary or not primary.Parent then
+        return nil
+    end
+
+    if State.AntiDescarrilhadorUpright then
+        pcall(function()
+            if State.AntiDescarrilhadorUpright.Align then
+                State.AntiDescarrilhadorUpright.Align:Destroy()
+            end
+            if State.AntiDescarrilhadorUpright.Attachment then
+                State.AntiDescarrilhadorUpright.Attachment:Destroy()
+            end
+        end)
+        State.AntiDescarrilhadorUpright = nil
+    end
+
+    local attachment = Instance.new("Attachment")
+    attachment.Name = "CarRideAntiUprightAttachment"
+    attachment.Position = Vector3.zero
+    attachment.Parent = primary
+
+    local align = Instance.new("AlignOrientation")
+    align.Name = "CarRideAntiUpright"
+    align.Attachment0 = attachment
+    align.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    align.AlignType = Enum.AlignType.AllAxes
+    align.RigidityEnabled = false
+    align.MaxTorque = Config.AntiDescarrilhador.UPRIGHT_TORQUE
+    align.Responsiveness = 200
+    align.CFrame = primary.CFrame
+    align.Parent = primary
+
+    State.AntiDescarrilhadorUpright = {
+        Attachment = attachment,
+        Align = align,
+        Primary = primary,
+    }
+
+    return State.AntiDescarrilhadorUpright
+end
+
+DestroyAntiUpright =
+function()
+    local data = State.AntiDescarrilhadorUpright
+    if not data then
+        return
+    end
+
+    pcall(function()
+        if data.Align then
+            data.Align:Destroy()
+        end
+        if data.Attachment then
+            data.Attachment:Destroy()
+        end
+    end)
+
+    State.AntiDescarrilhadorUpright = nil
+end
+
+local function UpdateAntiUpright()
+    local data = State.AntiDescarrilhadorUpright
+    if not data
+        or not data.Align
+        or not data.Primary
+        or not data.Primary.Parent then
+        return
+    end
+
+    local primary = data.Primary
+
+    local position
+    local velocity
+
+    pcall(function()
+        position = primary.Position
+        velocity = primary.AssemblyLinearVelocity
+    end)
+
+    if not position then
+        return
+    end
+
+    local flatLook
+
+    if velocity and velocity.Magnitude > 1 then
+        flatLook = Vector3.new(velocity.X, 0, velocity.Z)
+
+        if flatLook.Magnitude > 0.01 then
+            flatLook = flatLook.Unit
+        else
+            flatLook = nil
+        end
+    end
+
+    if not flatLook then
+        local look = primary.CFrame.LookVector
+        flatLook = Vector3.new(look.X, 0, look.Z)
+
+        if flatLook.Magnitude > 0.01 then
+            flatLook = flatLook.Unit
+        else
+            flatLook = Vector3.new(0, 0, -1)
+        end
+    end
+
+    pcall(function()
+        data.Align.CFrame =
+            CFrame.lookAt(
+                position,
+                position + flatLook,
+                Vector3.new(0, 1, 0)
+            )
+    end)
+end
+
 local function UpdateAntiWheelForce(
     wheel
 )
@@ -6075,9 +6203,24 @@ local function UpdateAntiWheelForce(
         return false
     end
 
+    local speed =
+        0
+
+    pcall(function()
+        speed =
+            wheel.AssemblyLinearVelocity.Magnitude
+    end)
+
+    local speedFactor =
+        1 +
+        (speed * speed) *
+        Config.AntiDescarrilhador.SPEED_FORCE_K /
+        10000
+
     local force =
         assemblyMass *
-        multiplier
+        multiplier *
+        speedFactor
 
     pcall(function()
         data.VectorForce.Force =
@@ -6142,6 +6285,8 @@ local function ApplyAntiWheelForces()
 
     State.AntiDescarrilhadorForcesActive =
         count
+
+    UpdateAntiUpright()
 
     return count
 end
@@ -6365,6 +6510,10 @@ function(
             os.clock()
 
         ApplyAntiSpeedControllers(
+            cart
+        )
+
+        CreateAntiUpright(
             cart
         )
 
@@ -7363,24 +7512,6 @@ else
 
     State.AntiDescarrilhadorLastLoggedCart =
         nil
-end
-
-SetupAntiCharacterWatcher()
-
-local initialHumanoid =
-    SafeGetHumanoid()
-
-if initialHumanoid then
-    BindAntiHumanoid(
-        initialHumanoid
-    )
-else
-    print(
-        "[AntiDescarrilhador] Jogador sentado: false"
-    )
-
-    State.AntiDescarrilhadorLastLoggedSeated =
-        false
 end
 
 StartAntiHeartbeat()
