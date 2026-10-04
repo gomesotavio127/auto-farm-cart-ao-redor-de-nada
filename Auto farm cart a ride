@@ -99,7 +99,7 @@ local Config = {
         StagePollInterval = 0.1
     },
     AntiDescarrilhador = {
-        TARGET_SPEED = 600,
+        TARGET_SPEED = 500,
         MAX_WHEELS = 8,
         WHEEL_FALLBACK_COUNT = 4,
         RAIL_RAY_DISTANCE = 14,
@@ -109,8 +109,9 @@ local Config = {
         RAIL_SURFACE_MARGIN = 0.03,
         POSITION_RESPONSE = 60,
         ORIENTATION_RESPONSE = 60,
-        CONSTRAINT_MAX_FORCE = 250000,
-        ORIENTATION_MAX_TORQUE = 250000,
+        CONSTRAINT_MASS_MULTIPLIER = 250,
+        CONSTRAINT_MIN_FORCE = 100000,
+        ORIENTATION_MAX_TORQUE = 5000000,
         SCAN_INTERVAL = 0.10,
         GUI_UPDATE_INTERVAL = 0.1
     }
@@ -5867,6 +5868,7 @@ local function GetAntiWheelRadius(
     )
 end
 
+
 local function GetAntiDescarrilhadorWheels(
     cart,
     referencePart
@@ -5888,103 +5890,18 @@ local function GetAntiDescarrilhadorWheels(
         return {}
     end
 
-    local constrained =
-        {}
-
-    for _, object in ipairs(
-        descendants
-    ) do
-        if object:IsA(
-            "HingeConstraint"
-        ) then
-            local a0
-            local a1
-
-            pcall(function()
-                a0 =
-                    object.Attachment0
-
-                a1 =
-                    object.Attachment1
-            end)
-
-            if a0
-                and IsAntiBasePart(
-                    a0.Parent
-                ) then
-                constrained[
-                    a0.Parent
-                ] =
-                    true
-            end
-
-            if a1
-                and IsAntiBasePart(
-                    a1.Parent
-                ) then
-                constrained[
-                    a1.Parent
-                ] =
-                    true
-            end
-
-        elseif object:IsA(
-            "Motor6D"
-        ) then
-            local p0
-            local p1
-
-            pcall(function()
-                p0 =
-                    object.Part0
-
-                p1 =
-                    object.Part1
-            end)
-
-            if p0
-                and IsAntiBasePart(
-                    p0
-                ) then
-                constrained[
-                    p0
-                ] =
-                    true
-            end
-
-            if p1
-                and IsAntiBasePart(
-                    p1
-                ) then
-                constrained[
-                    p1
-                ] =
-                    true
-            end
-        end
-    end
-
     local keywords = {
         "wheel",
-        "wheels",
-        "roda",
-        "rodas",
+        "roue",
         "tire",
+        "axle",
+        "roda",
         "tyre",
-        "pneu",
-        "pneus",
-        "guide",
-        "guides",
-        "guia",
-        "guias",
-        "hitbox",
-        "bogie",
-        "truck",
-        "axle"
+        "pneu"
     }
 
-    local candidates =
-        {}
+    local wheels = {}
+    local used = {}
 
     for _, object in ipairs(
         descendants
@@ -5995,13 +5912,12 @@ local function GetAntiDescarrilhadorWheels(
             and object ~=
             referencePart then
 
-            local score =
-                0
-
             local name =
                 Normalize(
                     object.Name
                 )
+
+            local matched = false
 
             for _, keyword in ipairs(
                 keywords
@@ -6012,114 +5928,15 @@ local function GetAntiDescarrilhadorWheels(
                     1,
                     true
                 ) then
-                    score +=
-                        35
+                    matched = true
                     break
                 end
             end
 
-            if constrained[
-                object
-            ] then
-                score +=
-                    30
-            end
-
-            if FindAntiRailNearWheel(
-                object,
-                cart
-            ) then
-                score +=
-                    35
-            end
-
-            if object.Position.Y <
-                referencePart.Position.Y +
-                1 then
-                score +=
-                    5
-            end
-
-            if score >
-                0 then
-                table.insert(
-                    candidates,
-                    {
-                        Part =
-                            object,
-                        Score =
-                            score
-                    }
-                )
-            end
-        end
-    end
-
-    table.sort(
-        candidates,
-        function(a, b)
-            return a.Score >
-                b.Score
-        end
-    )
-
-    local wheels =
-        {}
-
-    local used =
-        {}
-
-    for _, candidate in ipairs(
-        candidates
-    ) do
-        if #wheels >=
-            Config.AntiDescarrilhador.MAX_WHEELS then
-            break
-        end
-
-        local part =
-            candidate.Part
-
-        if part
-            and part.Parent
-            and not used[
-                part
-            ] then
-
-            used[
-                part
-            ] =
-                true
-
-            table.insert(
-                wheels,
-                part
-            )
-        end
-    end
-
-    if #wheels <
-        Config.AntiDescarrilhador.WHEEL_FALLBACK_COUNT then
-        for _, object in ipairs(
-            descendants
-        ) do
-            if #wheels >=
-                Config.AntiDescarrilhador.WHEEL_FALLBACK_COUNT then
-                break
-            end
-
-            if IsAntiBasePart(
-                object
-            )
-                and object ~=
-                referencePart
+            if matched
                 and not used[
                     object
-                ]
-                and FindAntiRailNearWheel(
-                    object,
-                    cart
-                ) then
+                ] then
 
                 used[
                     object
@@ -6134,9 +5951,70 @@ local function GetAntiDescarrilhadorWheels(
         end
     end
 
+    if #wheels > 0 then
+        table.sort(
+            wheels,
+            function(a, b)
+                return a.Position.Y <
+                    b.Position.Y
+            end
+        )
+
+        while #wheels >
+            Config.AntiDescarrilhador.MAX_WHEELS do
+            table.remove(
+                wheels
+            )
+        end
+
+        return wheels
+    end
+
+    local lowestParts = {}
+
+    for _, object in ipairs(
+        descendants
+    ) do
+        if IsAntiBasePart(
+            object
+        )
+            and object ~=
+            referencePart then
+
+            table.insert(
+                lowestParts,
+                object
+            )
+        end
+    end
+
+    table.sort(
+        lowestParts,
+        function(a, b)
+            return a.Position.Y <
+                b.Position.Y
+        end
+    )
+
+    local fallbackCount =
+        math.min(
+            Config.AntiDescarrilhador.WHEEL_FALLBACK_COUNT,
+            #lowestParts
+        )
+
+    for index = 1,
+        fallbackCount do
+
+        table.insert(
+            wheels,
+            lowestParts[
+                index
+            ]
+        )
+    end
+
     return wheels
 end
-
 local function GetAntiWheelsText()
     local names =
         {}
@@ -6482,6 +6360,36 @@ local function ApplyAntiSpeedControllers(
 end
 
 
+
+local function GetAntiPrimaryWheelHeightOffset(
+    referencePart,
+    wheel,
+    railNormal,
+    wheelRadius
+)
+    if not referencePart
+        or not wheel
+        or not railNormal
+        or railNormal.Magnitude <=
+        0.001 then
+        return nil
+    end
+
+    local primaryToWheel =
+        wheel.Position -
+        referencePart.Position
+
+    local wheelBaseFromCenter =
+        -railNormal.Unit *
+        (wheelRadius or 0)
+
+    local wheelBaseFromPrimary =
+        primaryToWheel +
+        wheelBaseFromCenter
+
+    return wheelBaseFromPrimary
+end
+
 local function GetAntiWheelAxle(
     wheel,
     cart,
@@ -6603,15 +6511,19 @@ local function SetAntiAttachmentAxes(
     return true
 end
 
+
 local function CreateAntiWheelConstraint(
     wheel,
     cart,
+    referencePart,
     hit
 )
     if not wheel
         or not wheel.Parent
         or not cart
         or not cart.Parent
+        or not referencePart
+        or not referencePart.Parent
         or not hit
         or not hit.Instance then
         return nil
@@ -6643,7 +6555,6 @@ local function CreateAntiWheelConstraint(
 
     if referenceDirection.Magnitude <=
         1 then
-
         local look =
             wheel.CFrame.LookVector
 
@@ -6697,13 +6608,29 @@ local function CreateAntiWheelConstraint(
             railNormal
         )
 
-    local targetCenter =
-        hit.Position +
-        railNormal *
-        (
-            radius +
-            Config.AntiDescarrilhador.RAIL_SURFACE_MARGIN
+    local baseOffsetFromPrimary =
+        GetAntiPrimaryWheelHeightOffset(
+            referencePart,
+            wheel,
+            railNormal,
+            radius
         )
+
+    if not baseOffsetFromPrimary then
+        return nil
+    end
+
+    local targetPrimaryPosition =
+        hit.Position -
+        baseOffsetFromPrimary
+
+    local wheelPrimaryOffset =
+        wheel.Position -
+        referencePart.Position
+
+    local targetWheelCenter =
+        targetPrimaryPosition +
+        wheelPrimaryOffset
 
     local wheelAttachment =
         Instance.new(
@@ -6730,7 +6657,7 @@ local function CreateAntiWheelConstraint(
     railPositionAttachment.Position =
         railPart.CFrame:
         PointToObjectSpace(
-            targetCenter
+            targetWheelCenter
         )
 
     railPositionAttachment.Parent =
@@ -6776,6 +6703,20 @@ local function CreateAntiWheelConstraint(
         return nil
     end
 
+    local assemblyMass =
+        referencePart.AssemblyMass
+
+    local gravity =
+        Workspace.Gravity
+
+    local maxForce =
+        math.max(
+            Config.AntiDescarrilhador.CONSTRAINT_MIN_FORCE,
+            assemblyMass *
+            gravity *
+            Config.AntiDescarrilhador.CONSTRAINT_MASS_MULTIPLIER
+        )
+
     local positionConstraint =
         Instance.new(
             "AlignPosition"
@@ -6802,16 +6743,16 @@ local function CreateAntiWheelConstraint(
     positionConstraint.ForceRelativeTo =
         Enum.ActuatorRelativeTo.Attachment1
 
+    -- X = longitudinal do trilho; força zero nesse eixo.
     positionConstraint.MaxAxesForce =
         Vector3.new(
             0,
-            Config.AntiDescarrilhador.CONSTRAINT_MAX_FORCE,
-            Config.AntiDescarrilhador.CONSTRAINT_MAX_FORCE
+            maxForce,
+            maxForce
         )
 
     positionConstraint.MaxVelocity =
-        Config.AntiDescarrilhador.TARGET_SPEED *
-        2
+        Config.AntiDescarrilhador.TARGET_SPEED
 
     positionConstraint.Responsiveness =
         Config.AntiDescarrilhador.POSITION_RESPONSE
@@ -6895,10 +6836,15 @@ end
 local function UpdateAntiWheelConstraint(
     wheel,
     cart,
+    referencePart,
     hit
 )
     if not wheel
         or not wheel.Parent
+        or not cart
+        or not cart.Parent
+        or not referencePart
+        or not referencePart.Parent
         or not hit
         or not hit.Instance then
         return false
@@ -6923,6 +6869,7 @@ local function UpdateAntiWheelConstraint(
             CreateAntiWheelConstraint(
                 wheel,
                 cart,
+                referencePart,
                 hit
             ) ~= nil
     end
@@ -7007,19 +6954,46 @@ local function UpdateAntiWheelConstraint(
             railNormal
         )
 
-    local centerTarget =
-        hit.Position +
-        railNormal *
-        (
-            radius +
-            Config.AntiDescarrilhador.RAIL_SURFACE_MARGIN
+    local baseOffsetFromPrimary =
+        GetAntiPrimaryWheelHeightOffset(
+            referencePart,
+            wheel,
+            railNormal,
+            radius
+        )
+
+    if not baseOffsetFromPrimary then
+        return false
+    end
+
+    local targetPrimaryPosition =
+        hit.Position -
+        baseOffsetFromPrimary
+
+    local wheelPrimaryOffset =
+        wheel.Position -
+        referencePart.Position
+
+    local targetWheelCenter =
+        targetPrimaryPosition +
+        wheelPrimaryOffset
+
+    local assemblyMass =
+        referencePart.AssemblyMass
+
+    local maxForce =
+        math.max(
+            Config.AntiDescarrilhador.CONSTRAINT_MIN_FORCE,
+            assemblyMass *
+            Workspace.Gravity *
+            Config.AntiDescarrilhador.CONSTRAINT_MASS_MULTIPLIER
         )
 
     pcall(function()
         data.RailPositionAttachment.Position =
             railPart.CFrame:
             PointToObjectSpace(
-                centerTarget
+                targetWheelCenter
             )
 
         data.RailOrientationAttachment.Position =
@@ -7039,8 +7013,21 @@ local function UpdateAntiWheelConstraint(
             railNormal
         )
 
+        data.PositionConstraint.MaxAxesForce =
+            Vector3.new(
+                0,
+                maxForce,
+                maxForce
+            )
+
+        data.PositionConstraint.MaxVelocity =
+            Config.AntiDescarrilhador.TARGET_SPEED
+
         data.PositionConstraint.Enabled =
             true
+
+        data.OrientationConstraint.MaxTorque =
+            Config.AntiDescarrilhador.ORIENTATION_MAX_TORQUE
 
         data.OrientationConstraint.Enabled =
             true
@@ -7048,7 +7035,6 @@ local function UpdateAntiWheelConstraint(
 
     return true
 end
-
 local function ApplyAntiTrackConstraints(
     cart,
     referencePart
@@ -7083,6 +7069,7 @@ local function ApplyAntiTrackConstraints(
                 and UpdateAntiWheelConstraint(
                     wheel,
                     cart,
+                    referencePart,
                     hit
                 ) then
 
@@ -7114,7 +7101,11 @@ local function ApplyAntiTrackConstraints(
                 or not wheel
                 or not wheel.Parent
                 or not data.RailPart
-                or not data.RailPart.Parent then
+                or not data.RailPart.Parent
+                or not FindAntiRailNearWheel(
+                    wheel,
+                    cart
+                ) then
 
                 DestroyAntiWheelConstraint(
                     wheel
