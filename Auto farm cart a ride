@@ -112,6 +112,7 @@ local Config = {
         HIGH_SPEED_GAIN = 1.5,
         INPUT_GAIN_MULTIPLIER = 0.5,
         LOW_SPEED_GAIN = 0.2,
+        IDLE_SPEED = 5,
         START_DELAY = 0.5,
         LATERAL_SPEED_THRESHOLD = 15,
         LATERAL_ANGLE_THRESHOLD = 30,
@@ -6406,18 +6407,54 @@ local function ApplyAntiForces(
             velocity
         )
 
+    local rightVector =
+        Vector3.zero
+
+    pcall(function()
+        rightVector =
+            referencePart.CFrame.RightVector
+    end)
+
+    rightVector =
+        Vector3.new(
+            rightVector.X,
+            0,
+            rightVector.Z
+        )
+
+    if rightVector.Magnitude <
+        0.001 then
+        rightVector =
+            Vector3.new(
+                -forward.Z,
+                0,
+                forward.X
+            )
+    else
+        rightVector =
+            rightVector.Unit
+    end
+
     local forwardSpeed =
         velocity:Dot(
             forward
         )
 
+    -- CORREÇÃO: mede apenas a velocidade lateral real do carrinho.
+    -- O código anterior misturava velocidade vertical nessa variável.
+    local lateralSpeedSigned =
+        velocity:Dot(
+            rightVector
+        )
+
     local lateralVelocity =
-        velocity -
-        forward *
-        forwardSpeed
+        rightVector *
+        lateralSpeedSigned
 
     local lateralSpeed =
-        lateralVelocity.Magnitude
+        math.abs(
+            lateralSpeedSigned
+        )
 
     local velocityDirection =
         Vector3.zero
@@ -6508,30 +6545,28 @@ local function ApplyAntiForces(
     local verticalVelocity =
         velocity.Y
 
-    local verticalForce =
-        0
-
     local floating =
         IsFloating(
             referencePart,
             cart
         )
 
-    if verticalVelocity <=
-        1 then
-        if floating then
-            verticalForce =
+    -- CORREÇÃO: mantém pressão descendente continuamente.
+    -- O bloco anterior tinha uma condição inalcançável para velocidade negativa
+    -- e podia deixar de pressionar o carrinho contra o trilho durante a subida.
+    local verticalForce =
+        floating
+        and magnetForce
+        or magnetDownForce
+
+    if verticalVelocity > 0 then
+        verticalForce +=
+            math.min(
+                verticalVelocity *
+                Config.AntiDescarrilhador.VERTICAL_DAMPING *
+                mass,
                 magnetForce
-        else
-            verticalForce =
-                magnetDownForce
-        end
-    elseif verticalVelocity < 0 then
-        verticalForce =
-            magnetDownForce
-    else
-        verticalForce =
-            0
+            )
     end
 
     local totalForce =
@@ -6541,12 +6576,12 @@ local function ApplyAntiForces(
             0
         )
 
+    -- CORREÇÃO: atua progressivamente contra o deslocamento lateral.
+    -- Em vez de esperar simultaneamente por velocidade lateral alta,
+    -- ângulo alto e avanço positivo, o sistema corrige qualquer desvio lateral
+    -- relevante enquanto o carrinho estiver em movimento.
     if lateralSpeed >
-        Config.AntiDescarrilhador.LATERAL_SPEED_THRESHOLD
-        and angleDegrees >
-            Config.AntiDescarrilhador.LATERAL_ANGLE_THRESHOLD
-        and forwardSpeed >
-            0 then
+        0.5 then
 
         local lateralCorrection =
             -lateralVelocity *
