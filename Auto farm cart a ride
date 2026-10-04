@@ -5355,8 +5355,8 @@ local function IsAntiTrackLikePart(
         "rail",
         "track",
         "trilho",
-        "trilho",
-        "roleta"
+        "via",
+        "ferro"
     }
 
     for _, keyword in ipairs(
@@ -5969,17 +5969,6 @@ local function GetAntiWheelsText()
             names,
             ", "
         )
-
-    if #text >
-        72 then
-        text =
-            string.sub(
-                text,
-                1,
-                69
-            ) ..
-            "..."
-    end
 
     return
         tostring(
