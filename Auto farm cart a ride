@@ -6032,6 +6032,7 @@ local function GetAntiTrackSamples(
                     samples,
                     {
                         Offset = offset,
+                        Position = result.Position,
                         Direction = direction
                     }
                 )
@@ -6085,6 +6086,7 @@ local function GetAntiTrackSamples(
                         samples,
                         {
                             Offset = offset,
+                            Position = wheelPosition,
                             Direction = direction
                         }
                     )
