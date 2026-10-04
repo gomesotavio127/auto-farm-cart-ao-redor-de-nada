@@ -102,9 +102,9 @@ local Config = {
         TARGET_SPEED = 500,
         MAX_WHEELS = 8,
         WHEEL_FALLBACK_COUNT = 4,
-        RAIL_RAY_DISTANCE = 14,
-        RAIL_SIDE_DISTANCE = 8,
-        WHEEL_RAIL_MAX_DISTANCE = 14,
+        RAIL_RAY_DISTANCE = 24,
+        RAIL_SIDE_DISTANCE = 2,
+        WHEEL_RAIL_MAX_DISTANCE = 8,
         RAIL_TOP_NORMAL_MIN = 0.55,
         RAIL_SURFACE_MARGIN = 0.03,
         POSITION_RESPONSE = 60,
@@ -246,7 +246,7 @@ local State = {
 
     LastSpawnIndex = nil,
 
-    AntiDescarrilhadorEnabled = false,
+    AntiDescarrilhadorEnabled = true,
     AntiDescarrilhadorCurrentCart = nil,
     AntiDescarrilhadorWheels = {},
     AntiDescarrilhadorHeartbeat = nil,
@@ -4714,7 +4714,7 @@ local function CreatePages()
         CreateLabel(
             antiStatusPanel,
             "Mode",
-            "Modo anti-derail (AlignPosition/AlignOrientation): inativo",
+            "Constraints ativas: 0",
             UDim2.new(
                 1,
                 -32,
@@ -5651,6 +5651,7 @@ local function GetAntiRailDirection(
     return direction
 end
 
+
 local function FindAntiRailNearPoint(
     origin,
     cart
@@ -5664,20 +5665,11 @@ local function FindAntiRailNearPoint(
             cart
         )
 
-    local rayHeight =
-        Config.AntiDescarrilhador.RAIL_RAY_DISTANCE *
-        0.75
-
     local rayLength =
-        Config.AntiDescarrilhador.RAIL_RAY_DISTANCE *
-        1.75
+        Config.AntiDescarrilhador.RAIL_RAY_DISTANCE
 
     local offsets = {
-        Vector3.new(
-            0,
-            0,
-            0
-        ),
+        Vector3.zero,
         Vector3.new(
             Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE,
             0,
@@ -5697,34 +5689,6 @@ local function FindAntiRailNearPoint(
             0,
             0,
             -Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE
-        ),
-        Vector3.new(
-            Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
-            0.707,
-            0,
-            Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
-            0.707
-        ),
-        Vector3.new(
-            -Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
-            0.707,
-            0,
-            Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
-            0.707
-        ),
-        Vector3.new(
-            Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
-            0.707,
-            0,
-            -Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
-            0.707
-        ),
-        Vector3.new(
-            -Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
-            0.707,
-            0,
-            -Config.AntiDescarrilhador.RAIL_SIDE_DISTANCE *
-            0.707
         )
     }
 
@@ -5744,7 +5708,7 @@ local function FindAntiRailNearPoint(
                     offset +
                     Vector3.new(
                         0,
-                        rayHeight,
+                        0.5,
                         0
                     ),
                     Vector3.new(
@@ -5772,8 +5736,11 @@ local function FindAntiRailNearPoint(
                     origin
                 ).Magnitude
 
-            if distance <
+            if distance <=
+                Config.AntiDescarrilhador.WHEEL_RAIL_MAX_DISTANCE
+                and distance <
                 bestDistance then
+
                 bestDistance =
                     distance
 
@@ -7176,10 +7143,43 @@ local function UpdateAntiDescarrilhadorGui()
             State.AntiDescarrilhadorEnabled
             and cart ~= nil
 
+        local activeConstraintCount =
+            0
+
+        for _, data in pairs(
+            State.AntiDescarrilhadorConstraints
+        ) do
+            if data
+                and data.PositionConstraint
+                and data.OrientationConstraint then
+
+                local positionEnabled =
+                    false
+
+                local orientationEnabled =
+                    false
+
+                pcall(function()
+                    positionEnabled =
+                        data.PositionConstraint.Enabled
+
+                    orientationEnabled =
+                        data.OrientationConstraint.Enabled
+                end)
+
+                if positionEnabled
+                    and orientationEnabled then
+                    activeConstraintCount +=
+                        2
+                end
+            end
+        end
+
         UI.AntiStatusMode.Text =
-            active
-            and "Modo anti-derail (AlignPosition/AlignOrientation): ativo"
-            or "Modo anti-derail (AlignPosition/AlignOrientation): inativo"
+            "Constraints ativas: " ..
+            tostring(
+                activeConstraintCount
+            )
 
         UI.AntiStatusMode.TextColor3 =
             active
@@ -7203,8 +7203,7 @@ end
 local GetSeatedCartFromHumanoid
 local SyncAntiSeatedCart
 
-GetSeatedCartFromHumanoid =
-function(
+local function findCartFromSeat(
     humanoid,
     seatPart
 )
@@ -7226,20 +7225,12 @@ function(
         return nil
     end
 
-    local isSeat =
-        false
-
-    pcall(function()
-        isSeat =
-            resolvedSeat:IsA(
-                "Seat"
-            )
-            or resolvedSeat:IsA(
-                "VehicleSeat"
-            )
-    end)
-
-    if not isSeat then
+    if not resolvedSeat:IsA(
+        "Seat"
+    )
+        and not resolvedSeat:IsA(
+            "VehicleSeat"
+        ) then
         return nil
     end
 
@@ -7275,6 +7266,9 @@ function(
 
     return nil
 end
+
+GetSeatedCartFromHumanoid =
+findCartFromSeat
 
 local function LogAntiDescarrilhadorState(
     humanoid,
@@ -7410,6 +7404,7 @@ local function BindAntiHumanoid(
                     or not seated
                     or not cart then
                     CleanupAntiCurrentCart()
+                    UpdateAntiDescarrilhadorGui()
                     return
                 end
 
@@ -7417,6 +7412,16 @@ local function BindAntiHumanoid(
                     humanoid,
                     seatPart
                 )
+
+                task.defer(function()
+                    if State.AntiDescarrilhadorEnabled then
+                        pcall(function()
+                            UpdateAntiMonitor(
+                                0
+                            )
+                        end)
+                    end
+                end)
             end
         )
 
@@ -8277,7 +8282,7 @@ local function InitializeGui()
     )
 
     SetAntiToggleVisual(
-        false
+        true
     )
 
     pcall(function()
